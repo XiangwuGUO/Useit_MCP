@@ -1,0 +1,17 @@
+# AudioSlicer MCP Server 依赖
+
+# 核心 MCP 库
+-e ../../../python-sdk
+
+# 音频处理库
+librosa>=0.10.0
+pydub>=0.25.0
+
+# 音频文件格式支持
+soundfile>=0.12.0
+
+# 数学计算
+numpy>=1.21.0
+
+# 可选：加速音频处理
+numba>=0.56.0

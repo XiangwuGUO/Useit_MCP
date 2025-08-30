@@ -1,0 +1,26 @@
+# MCP Gateway Server Dependencies
+
+# 核心 MCP 库
+-e ../../python-sdk
+
+# FastAPI 和web服务器
+fastapi>=0.104.1
+uvicorn[standard]>=0.24.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+
+# HTTP 客户端
+httpx>=0.25.0
+
+# 异步支持
+anyio>=3.7.0
+
+# 配置管理
+python-dotenv>=1.0.0
+
+# 开发和测试 (可选)
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+
+# 日志 (可选)
+structlog>=23.0.0
