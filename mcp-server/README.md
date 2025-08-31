@@ -45,7 +45,7 @@ cd ..
 ./start_simple_servers.sh start
 
 # FRP模式 - 启动并自动注册到远程
-export MCP_CLIENT_URL="http://your-server:8080"
+export MCP_CLIENT_URL="http://localhost:8080"
 ./start_simple_servers.sh start-frp
 
 # 启动单个服务器测试

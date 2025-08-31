@@ -349,13 +349,13 @@ async def execute_task(task: TaskRequest):
 # ============================================================================
 
 @app.post("/servers/register", response_model=APIResponse)
-async def register_server(server_info: dict):
+async def register_server(server_info: ServerRegistrationInfo):
     """注册MCP服务器 (用于FRP注册)"""
     try:
         # 提取服务器信息
-        name = server_info.get("name")
-        url = server_info.get("url") 
-        description = server_info.get("description", "")
+        name = server_info.name
+        url = server_info.url
+        description = server_info.description
         
         if not name or not url:
             raise ValueError("name 和 url 是必需的")

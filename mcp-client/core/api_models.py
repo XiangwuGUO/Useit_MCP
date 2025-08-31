@@ -44,8 +44,15 @@ class ToolCall(BaseModel):
     """工具调用请求"""
     tool_name: str = Field(..., description="工具名称")
     arguments: Dict[str, Any] = Field(default_factory=dict, description="工具参数")
-    vm_id: Optional[str] = Field(None, description="指定虚拟机ID")
-    session_id: Optional[str] = Field(None, description="指定会话ID")
+    vm_id: str = Field(..., description="虚拟机ID")
+    session_id: str = Field(..., description="会话ID")
+
+
+class ToolFindCall(BaseModel):
+    """查找并调用工具请求"""
+    tool_name: str = Field(..., description="工具名称")
+    arguments: Dict[str, Any] = Field(default_factory=dict, description="工具参数")
+    preferred_vm_id: Optional[str] = Field(None, description="优先使用的虚拟机ID")
 
 
 class ToolInfo(BaseModel):
@@ -75,6 +82,15 @@ class ResourceInfo(BaseModel):
     session_id: str
 
 
+# === 服务器注册模型 ===
+
+class ServerRegistrationInfo(BaseModel):
+    """服务器注册信息"""
+    name: str = Field(..., description="服务器名称")
+    url: str = Field(..., description="服务器URL地址")
+    description: str = Field("", description="服务器描述")
+
+
 # === 智能任务模型 ===
 
 class TaskRequest(BaseModel):
@@ -84,6 +100,7 @@ class TaskRequest(BaseModel):
     mcp_server_name: str = Field(..., description="MCP服务器名称")
     task_description: str = Field(..., description="任务描述")
     max_steps: int = Field(10, description="最大执行步骤数")
+    context: Optional[Dict[str, Any]] = Field(None, description="任务上下文")
 
 
 class TaskResult(BaseModel):

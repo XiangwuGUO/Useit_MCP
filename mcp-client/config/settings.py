@@ -46,6 +46,7 @@ class Settings:
         cors_origins_str = os.getenv("CORS_ORIGINS", "*")
         self.cors_origins = [cors_origins_str] if cors_origins_str != "*" else ["*"]
         self.enable_docs = os.getenv("ENABLE_DOCS", "true").lower() == "true"
+        self.debug = os.getenv("DEBUG", "false").lower() == "true"
 
 
 # 全局配置实例

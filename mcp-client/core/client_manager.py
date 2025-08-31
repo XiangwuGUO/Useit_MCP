@@ -46,25 +46,37 @@ class MCPClient:
         try:
             logger.info(f"🔌 连接到 {self.remote_url}")
             
-            # 创建客户端连接
-            client_result = streamablehttp_client(self.remote_url, timeout=self.timeout)
-            client = await self.exit_stack.enter_async_context(client_result)
+            # 创建客户端连接  
+            client_result = await self.exit_stack.enter_async_context(
+                streamablehttp_client(self.remote_url)
+            )
             
             # 创建会话
             self.session = await self.exit_stack.enter_async_context(
-                ClientSession(client, timeout=self.timeout)
+                ClientSession(client_result[0], client_result[1])
             )
             
-            # 测试连接
-            await self.session.initialize()
-            
-            self.connected = True
-            self.last_seen = datetime.now()
-            logger.info(f"✅ 成功连接到 {self.remote_url}")
-            
-            # 清空缓存
-            self._tools_cache = None
-            self._resources_cache = None
+            # 测试连接 (增加超时处理)
+            import asyncio
+            try:
+                await asyncio.wait_for(self.session.initialize(), timeout=10.0)
+                
+                self.connected = True
+                self.last_seen = datetime.now()
+                logger.info(f"✅ 成功连接到 {self.remote_url}")
+                
+                # 清空缓存
+                self._tools_cache = None
+                self._resources_cache = None
+                
+            except asyncio.TimeoutError:
+                logger.error(f"连接超时: {self.remote_url}")
+                await self.disconnect()
+                raise RuntimeError(f"连接超时: {self.remote_url}")
+            except Exception as init_error:
+                logger.error(f"初始化失败: {init_error}")
+                await self.disconnect() 
+                raise RuntimeError(f"初始化失败: {init_error}")
             
         except Exception as e:
             logger.error(f"❌ 连接失败 {self.remote_url}: {e}")
@@ -103,6 +115,8 @@ class MCPClient:
                 ToolInfo(
                     name=tool.name,
                     description=tool.description or "暂无描述",
+                    vm_id=self.vm_id,
+                    session_id=self.session_id,
                     input_schema=tool.inputSchema or {}
                 )
                 for tool in result.tools
@@ -130,7 +144,8 @@ class MCPClient:
                     uri=resource.uri,
                     name=resource.name or resource.uri,
                     description=resource.description or "暂无描述",
-                    mimeType=resource.mimeType
+                    vm_id=self.vm_id,
+                    session_id=self.session_id
                 )
                 for resource in result.resources
             ]
@@ -167,10 +182,10 @@ class MCPClient:
             vm_id=self.vm_id,
             session_id=self.session_id,
             remote_url=self.remote_url,
-            connected=self.connected,
+            status="connected" if self.connected else "disconnected",
             last_seen=self.last_seen.isoformat() if self.last_seen else None,
-            tools_count=len(self._tools_cache) if self._tools_cache else 0,
-            resources_count=len(self._resources_cache) if self._resources_cache else 0
+            tool_count=len(self._tools_cache) if self._tools_cache else 0,
+            resource_count=len(self._resources_cache) if self._resources_cache else 0
         )
 
 

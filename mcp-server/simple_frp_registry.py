@@ -74,6 +74,11 @@ class SimpleFRPRegistry:
                 tunnel = FrpTunnel(config.local_port, config.local_host)
                 public_url = tunnel.start_tunnel()
                 
+                # 强制使用HTTP而不是HTTPS
+                if public_url.startswith("https://"):
+                    public_url = public_url.replace("https://", "http://")
+                    print(f"🔄 转换为HTTP地址: {public_url}")
+                
                 # 为MCP添加路径
                 if not public_url.endswith("/mcp"):
                     public_url = public_url.rstrip("/") + "/mcp"

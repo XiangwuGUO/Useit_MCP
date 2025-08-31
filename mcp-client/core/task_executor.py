@@ -15,7 +15,7 @@ from datetime import datetime
 import httpx
 
 from .api_models import TaskRequest, TaskResult, ToolInfo
-from .client_manager import client_manager
+from .client_manager import ClientManager
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +43,9 @@ class ExecutionStep:
 class TaskExecutor:
     """智能任务执行器"""
     
-    def __init__(self, anthropic_api_key: str = None):
+    def __init__(self, client_manager: ClientManager, anthropic_api_key: str = None):
         """初始化执行器"""
+        self.client_manager = client_manager
         self.api_key = anthropic_api_key or settings.anthropic_api_key
         if not self.api_key:
             raise ValueError("需要设置 ANTHROPIC_API_KEY 环境变量")
@@ -107,11 +108,11 @@ class TaskExecutor:
     
     async def _get_available_tools(self, vm_id: str, session_id: str) -> List[ToolInfo]:
         """获取指定客户机的可用工具"""
-        client = await client_manager.get_client(vm_id, session_id)
+        client = await self.client_manager.get_client(vm_id, session_id)
         if not client:
             raise Exception(f"客户机不存在: {vm_id}/{session_id}")
         
-        return await client.list_tools()
+        return await client.get_tools()
     
     async def _analyze_task_with_claude(self, task_request: TaskRequest, available_tools: List[ToolInfo]) -> List[ExecutionStep]:
         """使用Claude API分析任务"""
@@ -262,7 +263,7 @@ class TaskExecutor:
                 logger.info(f"执行步骤 {i}/{len(steps)}: {step.tool_name}")
                 
                 # 调用工具
-                result = await client_manager.call_tool(
+                result = await self.client_manager.call_tool(
                     task_request.vm_id,
                     task_request.session_id,
                     step.tool_name,
@@ -356,17 +357,24 @@ class TaskExecutor:
         await self.http_client.aclose()
 
 
-# 全局任务执行器实例
-_task_executor = None
+# 便捷函数
 
-def get_task_executor() -> TaskExecutor:
-    """获取任务执行器实例"""
-    global _task_executor
-    if _task_executor is None:
-        _task_executor = TaskExecutor()
-    return _task_executor
-
-async def execute_intelligent_task(task_request: TaskRequest) -> TaskResult:
+async def execute_intelligent_task(
+    client_manager: ClientManager,
+    vm_id: str,
+    session_id: str,
+    mcp_server_name: str,
+    task_description: str,
+    context: Optional[Dict[str, Any]] = None
+) -> TaskResult:
     """执行智能任务的便捷函数"""
-    executor = get_task_executor()
+    task_request = TaskRequest(
+        vm_id=vm_id,
+        session_id=session_id,
+        mcp_server_name=mcp_server_name,
+        task_description=task_description,
+        context=context
+    )
+    
+    executor = TaskExecutor(client_manager)
     return await executor.execute_task(task_request)
