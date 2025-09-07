@@ -17,8 +17,50 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 
-# 导入简化的FRP注册器
-from simple_frp_registry import register_mcp_server, cleanup_all_registrations, get_registry
+# 导入FRP API 客户端功能
+import requests
+
+# FRP API 服务器配置
+FRP_API_URL = "http://localhost:5888"
+FRP_AVAILABLE = True  # 假设FRP API服务器可用
+
+def create_frp_tunnel(port: int, host: str = "127.0.0.1") -> dict:
+    """通过API创建FRP隧道"""
+    try:
+        response = requests.post(
+            f"{FRP_API_URL}/tunnels",
+            json={"port": port, "host": host},
+            timeout=30
+        )
+        
+        if response.status_code == 201:
+            return {"success": True, "data": response.json()}
+        else:
+            return {"success": False, "error": f"HTTP {response.status_code}: {response.text}"}
+    
+    except requests.exceptions.ConnectionError:
+        return {"success": False, "error": "无法连接到FRP API服务器，请确保FRP服务器在端口5888上运行"}
+    except Exception as e:
+        return {"success": False, "error": f"创建FRP隧道失败: {str(e)}"}
+
+
+def delete_frp_tunnel(tunnel_id: str) -> dict:
+    """通过API删除FRP隧道"""
+    try:
+        response = requests.delete(
+            f"{FRP_API_URL}/tunnels/{tunnel_id}",
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            return {"success": True, "data": response.json()}
+        else:
+            return {"success": False, "error": f"HTTP {response.status_code}: {response.text}"}
+    
+    except requests.exceptions.ConnectionError:
+        return {"success": False, "error": "无法连接到FRP API服务器"}
+    except Exception as e:
+        return {"success": False, "error": f"删除FRP隧道失败: {str(e)}"}
 
 
 @dataclass
@@ -71,11 +113,18 @@ class SimpleMCPLauncher:
         self.server_addresses = {}
         self.enable_frp = False  # 是否启用FRP功能
         self.registry_url = os.environ.get("MCP_CLIENT_URL", "http://localhost:8080")
+        self.vm_id = ""  # 虚拟机ID
+        self.session_id = ""  # 会话ID
+        self._cleanup_registered = False
+        self.active_frp_tunnels = {}  # 存储隧道ID而不是隧道对象
         
-        # 注册退出清理
-        atexit.register(self.cleanup)
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
+    def _register_cleanup(self):
+        """注册退出清理（仅在实际启动服务器时调用）"""
+        if not self._cleanup_registered:
+            atexit.register(self.cleanup)
+            signal.signal(signal.SIGINT, self._signal_handler)
+            signal.signal(signal.SIGTERM, self._signal_handler)
+            self._cleanup_registered = True
     
     def _signal_handler(self, signum, frame):
         """信号处理器"""
@@ -98,13 +147,6 @@ class SimpleMCPLauncher:
                 port=8003,
                 description="文件系统操作"
             ),
-            SimpleServerConfig(
-                name="web_search",
-                module_path="official_server/web_search/server.py", 
-                port=8004,
-                description="网页搜索服务",
-                env_vars={"OPENAI_API_KEY": "required"}
-            )
         ]
     
     def load_custom_servers_config(self, config_path: str = "servers_config.yaml") -> List[SimpleServerConfig]:
@@ -166,8 +208,8 @@ class SimpleMCPLauncher:
         process = subprocess.Popen(
             cmd,
             env={**os.environ, **env},
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
         )
         
         # 等待启动
@@ -186,7 +228,10 @@ class SimpleMCPLauncher:
         """启动所有服务器"""
         addresses = {}
         
-        print(f"🚀 启动 MCP 服务器{'（含FRP注册）' if self.enable_frp else ''}...")
+        # 只有在实际启动服务器时才注册清理函数
+        self._register_cleanup()
+        
+        print(f"🚀 启动 MCP 服务器{'（含JSON文件生成）' if self.enable_frp else ''}...")
         
         # 启动官方服务器
         for config in self.get_official_servers():
@@ -196,16 +241,10 @@ class SimpleMCPLauncher:
                 self.server_addresses[config.name] = address
                 addresses[config.name] = address
                 
-                # 如果启用FRP，进行注册
+                # 如果启用FRP，记录服务器信息（稍后统一生成JSON）
                 if self.enable_frp:
-                    port = self._extract_port_from_address(address)
-                    register_mcp_server(
-                        server_name=config.name,
-                        local_port=port,
-                        description=config.description,
-                        enable_frp=True,
-                        registry_url=self.registry_url
-                    )
+                    # 仅记录信息，不进行实际注册
+                    pass
                 
             except Exception as e:
                 print(f"❌ 启动 {config.name} 失败: {e}")
@@ -219,19 +258,17 @@ class SimpleMCPLauncher:
                     self.server_addresses[config.name] = address
                     addresses[config.name] = address
                     
-                    # 如果启用FRP，进行注册
+                    # 如果启用FRP，记录服务器信息（稍后统一生成JSON）
                     if self.enable_frp:
-                        port = self._extract_port_from_address(address)
-                        register_mcp_server(
-                            server_name=config.name,
-                            local_port=port,
-                            description=config.description,
-                            enable_frp=True,
-                            registry_url=self.registry_url
-                        )
+                        # 仅记录信息，不进行实际注册
+                        pass
                     
                 except Exception as e:
                     print(f"❌ 启动自定义服务器 {config.name} 失败: {e}")
+        
+        # 如果启用FRP，统一生成JSON文件
+        if self.enable_frp and addresses:
+            self._generate_frp_json(addresses)
         
         return addresses
     
@@ -244,6 +281,179 @@ class SimpleMCPLauncher:
             return 8000
         except:
             return 8000
+    
+    def _generate_frp_json(self, addresses: Dict[str, str]):
+        """生成FRP JSON注册文件（包含隧道创建）"""
+        try:
+            import json
+            import time
+            
+            # 创建FRP隧道并构建服务器列表
+            servers = []
+            
+            for server_name, address in addresses.items():
+                port = self._extract_port_from_address(address)
+                
+                # 查找服务器配置获取描述
+                all_configs = self.get_official_servers() + self.load_custom_servers_config()
+                config = next((c for c in all_configs if c.name == server_name), None)
+                description = config.description if config else ""
+                
+                public_url = None
+                frp_enabled = False
+                tunnel_id = None
+                
+                # 通过API创建FRP隧道
+                if FRP_AVAILABLE:
+                    try:
+                        print(f"🌐 为 {server_name} 创建 FRP 隧道...")
+                        result = create_frp_tunnel(port, "127.0.0.1")
+                        
+                        if result["success"]:
+                            tunnel_data = result["data"]
+                            tunnel_url = tunnel_data.get("public_url", "")
+                            tunnel_id = tunnel_data.get("share_token", "")
+                            
+                            # 强制使用HTTP而不是HTTPS
+                            if tunnel_url.startswith("https://"):
+                                tunnel_url = tunnel_url.replace("https://", "http://")
+                                print(f"🔄 转换为HTTP地址: {tunnel_url}")
+                            
+                            # 为MCP添加路径
+                            if not tunnel_url.endswith("/mcp"):
+                                public_url = tunnel_url.rstrip("/") + "/mcp"
+                            else:
+                                public_url = tunnel_url
+                            
+                            # 存储隧道ID以便清理
+                            self.active_frp_tunnels[server_name] = tunnel_id
+                            frp_enabled = True
+                            
+                            print(f"✅ FRP 隧道创建成功: {public_url}")
+                        else:
+                            print(f"❌ FRP 隧道创建失败 {server_name}: {result['error']}")
+                            print(f"⚠️ 将使用本地地址")
+                        
+                    except Exception as e:
+                        print(f"❌ FRP 隧道创建异常 {server_name}: {e}")
+                        print(f"⚠️ 将使用本地地址")
+                else:
+                    print(f"⚠️ FRP 功能未可用，使用本地地址: {server_name}")
+                
+                server_data = {
+                    "name": server_name,
+                    "url": public_url or address,
+                    "description": description,
+                    "transport": "http",
+                    "local_url": address,
+                    "public_url": public_url,
+                    "frp_enabled": frp_enabled,
+                    "tunnel_id": tunnel_id,
+                    "timestamp": int(time.time())
+                }
+                servers.append(server_data)
+            
+            # 构建完整的JSON结构
+            json_data = {
+                "vm_id": self.vm_id,
+                "session_id": self.session_id,
+                "registry_url": self.registry_url,
+                "servers": servers
+            }
+            
+            # 写入文件到项目根目录
+            json_file = "../mcp_server_frp.json"
+            with open(json_file, 'w', encoding='utf-8') as f:
+                json.dump(json_data, f, indent=2, ensure_ascii=False)
+            
+            print(f"✅ JSON注册文件已生成: {json_file}")
+            print(f"   VM ID: {self.vm_id}")
+            print(f"   Session ID: {self.session_id}")
+            print(f"   服务器数量: {len(servers)}")
+            print(f"   FRP隧道数量: {len(self.active_frp_tunnels)}")
+            
+        except Exception as e:
+            print(f"❌ 生成JSON文件失败: {e}")
+    
+    def _generate_single_server_json(self, config: SimpleServerConfig, address: str):
+        """为单个服务器生成JSON文件（包含FRP隧道创建）"""
+        try:
+            import json
+            import time
+            
+            port = self._extract_port_from_address(address)
+            public_url = None
+            frp_enabled = False
+            tunnel_id = None
+            
+            # 通过API创建FRP隧道
+            if FRP_AVAILABLE:
+                try:
+                    print(f"🌐 为 {config.name} 创建 FRP 隧道...")
+                    result = create_frp_tunnel(port, "127.0.0.1")
+                    
+                    if result["success"]:
+                        tunnel_data = result["data"]
+                        tunnel_url = tunnel_data.get("public_url", "")
+                        tunnel_id = tunnel_data.get("share_token", "")
+                        
+                        # 强制使用HTTP而不是HTTPS
+                        if tunnel_url.startswith("https://"):
+                            tunnel_url = tunnel_url.replace("https://", "http://")
+                            print(f"🔄 转换为HTTP地址: {tunnel_url}")
+                        
+                        # 为MCP添加路径
+                        if not tunnel_url.endswith("/mcp"):
+                            public_url = tunnel_url.rstrip("/") + "/mcp"
+                        else:
+                            public_url = tunnel_url
+                        
+                        frp_enabled = True
+                        print(f"✅ FRP 隧道创建成功: {public_url}")
+                        
+                        # 存储隧道ID以便清理
+                        self.active_frp_tunnels[config.name] = tunnel_id
+                    else:
+                        print(f"❌ FRP 隧道创建失败 {config.name}: {result['error']}")
+                        print(f"⚠️ 将使用本地地址")
+                    
+                except Exception as e:
+                    print(f"❌ FRP 隧道创建异常 {config.name}: {e}")
+                    print(f"⚠️ 将使用本地地址")
+            else:
+                print(f"⚠️ FRP 功能未可用，使用本地地址: {config.name}")
+            
+            server_data = {
+                "name": config.name,
+                "url": public_url or address,
+                "description": config.description,
+                "transport": "http",
+                "local_url": address,
+                "public_url": public_url,
+                "frp_enabled": frp_enabled,
+                "tunnel_id": tunnel_id,
+                "timestamp": int(time.time())
+            }
+            
+            # 构建完整的JSON结构
+            json_data = {
+                "vm_id": self.vm_id,
+                "session_id": self.session_id,
+                "registry_url": self.registry_url,
+                "servers": [server_data]
+            }
+            
+            # 写入文件到项目根目录
+            json_file = "../mcp_server_frp.json"
+            with open(json_file, 'w', encoding='utf-8') as f:
+                json.dump(json_data, f, indent=2, ensure_ascii=False)
+            
+            print(f"✅ JSON注册文件已生成: {json_file}")
+            if public_url:
+                print(f"🔗 公网地址: {public_url}")
+            
+        except Exception as e:
+            print(f"❌ 生成JSON文件失败: {e}")
     
     def stop_all_servers(self):
         """停止所有服务器"""
@@ -267,8 +477,32 @@ class SimpleMCPLauncher:
     def cleanup(self):
         """清理资源"""
         self.stop_all_servers()
-        if self.enable_frp:
-            cleanup_all_registrations()
+        self._cleanup_frp_tunnels()
+    
+    def _cleanup_frp_tunnels(self):
+        """清理FRP隧道"""
+        if self.active_frp_tunnels:
+            print("🛑 停止FRP隧道...")
+            for server_name, tunnel_id in self.active_frp_tunnels.items():
+                try:
+                    result = delete_frp_tunnel(tunnel_id)
+                    if result["success"]:
+                        print(f"✅ FRP隧道已停止: {server_name} ({tunnel_id})")
+                    else:
+                        print(f"❌ 停止隧道失败 {server_name}: {result['error']}")
+                except Exception as e:
+                    print(f"❌ 停止隧道异常 {server_name}: {e}")
+            self.active_frp_tunnels.clear()
+            
+            # 删除JSON文件
+            try:
+                import os
+                json_file = "../mcp_server_frp.json"
+                if os.path.exists(json_file):
+                    os.remove(json_file)
+                    print(f"✅ 已删除JSON文件: {json_file}")
+            except Exception as e:
+                print(f"❌ 删除JSON文件失败: {e}")
     
     def get_server_status(self) -> Dict[str, str]:
         """获取服务器状态"""
@@ -277,14 +511,19 @@ class SimpleMCPLauncher:
             if process.poll() is None:
                 local_addr = self.server_addresses.get(name, 'unknown')
                 
-                if self.enable_frp:
-                    # 获取FRP信息
-                    registry = get_registry()
-                    server_info = registry.get_server_info(name)
-                    if server_info and server_info.get("public_url"):
-                        status[name] = f"运行中 - 本地: {local_addr}, 公网: {server_info['public_url']}"
-                    else:
-                        status[name] = f"运行中 - {local_addr} (FRP注册失败)"
+                if self.enable_frp and hasattr(self, 'active_frp_tunnels'):
+                    # 从JSON文件获取FRP信息
+                    try:
+                        import json
+                        with open("../mcp_server_frp.json", 'r') as f:
+                            json_data = json.load(f)
+                            server_info = next((s for s in json_data['servers'] if s['name'] == name), None)
+                            if server_info and server_info.get('public_url'):
+                                status[name] = f"运行中 - 本地: {local_addr}, 公网: {server_info['public_url']}"
+                            else:
+                                status[name] = f"运行中 - {local_addr} (未创建FRP隧道)"
+                    except:
+                        status[name] = f"运行中 - {local_addr} (无FRP信息)"
                 else:
                     status[name] = f"运行中 - {local_addr}"
             else:
@@ -302,6 +541,10 @@ def main():
     parser.add_argument('--enable-frp', action='store_true', help='启用FRP反向代理注册')
     parser.add_argument('--registry-url', help='MCP客户端注册地址', 
                        default=os.environ.get("MCP_CLIENT_URL", "http://localhost:8080"))
+    parser.add_argument('--vm-id', help='虚拟机ID (FRP模式必需)')
+    parser.add_argument('--session-id', help='会话ID (FRP模式必需)')
+    parser.add_argument('--base-dir', help='MCP服务器基础工作目录', 
+                       default=os.path.join(os.getcwd(), 'mcp_workspace'))
     parser.add_argument('--list', action='store_true', help='列出可用服务器')
     parser.add_argument('--status', action='store_true', help='显示服务器状态')
     
@@ -310,6 +553,20 @@ def main():
     launcher = SimpleMCPLauncher()
     launcher.enable_frp = args.enable_frp
     launcher.registry_url = args.registry_url
+    launcher.vm_id = getattr(args, 'vm_id', '') or ''
+    launcher.session_id = getattr(args, 'session_id', '') or ''
+    
+    # 设置基础工作目录
+    base_dir = os.path.abspath(args.base_dir.strip('"\''))  # 移除可能的引号
+    os.makedirs(base_dir, exist_ok=True)
+    os.environ['MCP_BASE_DIR'] = base_dir
+    print(f"📁 MCP基础工作目录: {base_dir}")
+    
+    # 检查FRP模式必需参数
+    if args.enable_frp and (not launcher.vm_id or not launcher.session_id):
+        print("❌ FRP模式需要提供 --vm-id 和 --session-id 参数")
+        print("用法: python simple_launcher.py --enable-frp --vm-id <vm_id> --session-id <session_id>")
+        return
     
     if args.list:
         print("📋 可用服务器:")
@@ -336,6 +593,8 @@ def main():
     
     if args.single:
         # 启动单个服务器
+        launcher._register_cleanup()  # 注册清理函数
+        
         all_servers = launcher.get_official_servers() + launcher.load_custom_servers_config()
         target_server = next((s for s in all_servers if s.name == args.single), None)
         
@@ -348,24 +607,14 @@ def main():
             launcher.running_processes[target_server.name] = process
             launcher.server_addresses[target_server.name] = address
             
-            # 如果启用FRP，进行注册
+            # 如果启用FRP，生成单个服务器的JSON文件
             if args.enable_frp:
-                port = launcher._extract_port_from_address(address)
-                register_mcp_server(
-                    server_name=target_server.name,
-                    local_port=port,
-                    description=target_server.description,
-                    enable_frp=True,
-                    registry_url=args.registry_url
-                )
+                launcher._generate_single_server_json(target_server, address)
             
             print(f"\n🎉 服务器 {target_server.name} 启动成功!")
             if args.enable_frp:
-                print(f"💡 服务器已通过FRP注册，服务器端MCP客户端现在可以连接")
-                registry = get_registry()
-                server_info = registry.get_server_info(target_server.name)
-                if server_info and server_info.get("public_url"):
-                    print(f"🔗 公网地址: {server_info['public_url']}")
+                print(f"📄 JSON注册文件已生成，请通过安全通道传输到服务器端")
+                print(f"📁 文件路径: ./mcp_server_frp.json")
             print(f"📍 本地地址: {address}")
             print(f"\n按 Ctrl+C 停止...")
             
@@ -391,16 +640,10 @@ def main():
         
         if args.enable_frp:
             print(f"\n💡 FRP模式已启用:")
-            print(f"   • 所有服务器已通过FRP反向代理注册")
-            print(f"   • 服务器端MCP客户端现在可以连接到客户机上的服务器")
-            print(f"   • 注册地址: {args.registry_url}")
-            
-            # 显示注册信息
-            registry = get_registry()
-            for server_name in addresses.keys():
-                server_info = registry.get_server_info(server_name)
-                if server_info:
-                    print(f"   • {server_name}: {server_info.get('public_url', '注册失败')}")
+            print(f"   • JSON注册文件已生成: mcp_server_frp.json")
+            print(f"   • 请通过安全通道传输JSON文件到服务器端进行注册")
+            print(f"   • 目标注册地址: {args.registry_url}")
+            print(f"   • 服务器数量: {len(addresses)}")
         else:
             print(f"\n💡 本地模式:")
             print(f"   • 服务器仅在本地可访问")

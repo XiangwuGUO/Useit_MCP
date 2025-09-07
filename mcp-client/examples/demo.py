@@ -221,35 +221,6 @@ class MCPGatewayDemo:
         except Exception as e:
             print(f"      ❌ FileSystem工具调用异常: {e}")
         
-        # 测试WebSearch服务器(如果配置了OPENAI_API_KEY)
-        print("   🔍 测试WebSearch服务器...")
-        try:
-            ws_session_id = f"{DEMO_SESSION_ID}-websearch"
-            tool_call = {
-                "tool_name": "web_search",
-                "arguments": {
-                    "query": "Python MCP protocol简介",
-                    "context_description": "了解MCP协议",
-                    "max_output_tokens": 500
-                },
-                "vm_id": DEMO_VM_ID,
-                "session_id": ws_session_id
-            }
-            
-            response = await self.client.post(f"{self.gateway_url}/tools/call", json=tool_call)
-            if response.status_code == 200:
-                result = response.json()['data']
-                print(f"      ✅ WebSearch工具调用成功")
-                search_result = result.get('result', {})
-                if isinstance(search_result, dict) and 'summary' in search_result:
-                    summary = search_result['summary'][:100] + "..." if len(search_result.get('summary', '')) > 100 else search_result.get('summary', '')
-                    print(f"      搜索摘要: {summary}")
-                else:
-                    print(f"      结果: {str(result)[:100]}...")
-            else:
-                print(f"      ❌ WebSearch工具调用失败: {response.status_code}")
-        except Exception as e:
-            print(f"      ❌ WebSearch工具调用异常: {e}")
     
     async def run_intelligent_task_demo(self):
         """运行智能任务演示"""

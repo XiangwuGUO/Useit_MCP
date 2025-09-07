@@ -42,7 +42,6 @@ cd mcp-client && python server.py
 # Start individual servers for testing
 ./start_simple_servers.sh single filesystem
 ./start_simple_servers.sh single audio_slicer
-./start_simple_servers.sh single web_search
 
 # Start single server with FRP tunnel
 ./start_simple_servers.sh single-frp filesystem
@@ -92,7 +91,6 @@ cd mcp-server/official_server/audio_slicer && pip install -r requirements.txt
 - `official_server/`: Standard MCP server implementations
   - `filesystem/`: File operations (port 8003)
   - `audio_slicer/`: Audio processing (port 8002) 
-  - `web_search/`: Web search functionality (port 8004)
 
 ### Deployment Modes
 

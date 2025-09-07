@@ -84,13 +84,6 @@ class MCPServerManager:
                 port=8003,
                 description="Sandboxed filesystem operations"
             ),
-            ServerConfig(
-                name="web_search",
-                module_path="official_server/web_search/server.py", 
-                port=8004,
-                description="Web search using OpenAI API",
-                env_vars={"OPENAI_API_KEY": "required"}
-            )
         ]
     
     def load_custom_servers_config(self, config_path: str = "servers_config.yaml") -> List[ServerConfig]:

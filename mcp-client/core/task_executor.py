@@ -8,13 +8,13 @@ import asyncio
 import json
 import logging
 import os
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass
 from datetime import datetime
 
 import httpx
 
-from .api_models import TaskRequest, TaskResult, ToolInfo
+from .api_models import TaskRequest, TaskResult, ToolInfo, SmartToolResult
 from .client_manager import ClientManager
 
 logger = logging.getLogger(__name__)
@@ -64,7 +64,7 @@ class TaskExecutor:
                 raise Exception(f"客户机 {task_request.vm_id}/{task_request.session_id} 没有可用工具")
             
             # 2. 使用Claude API分析任务
-            execution_steps = await self._analyze_task_with_claude(task_request, available_tools)
+            execution_steps, token_usage = await self._analyze_task_with_claude(task_request, available_tools)
             
             # 3. 执行步骤
             results = await self._execute_steps(task_request, execution_steps)
@@ -85,7 +85,8 @@ class TaskExecutor:
                 execution_steps=results,
                 final_result=results[-1].get("result", "") if results else "",
                 summary=summary,
-                execution_time_seconds=execution_time
+                execution_time_seconds=execution_time,
+                token_usage=token_usage
             )
             
         except Exception as e:
@@ -112,9 +113,9 @@ class TaskExecutor:
         if not client:
             raise Exception(f"客户机不存在: {vm_id}/{session_id}")
         
-        return await client.get_tools()
+        return await client.get_all_tools()
     
-    async def _analyze_task_with_claude(self, task_request: TaskRequest, available_tools: List[ToolInfo]) -> List[ExecutionStep]:
+    async def _analyze_task_with_claude(self, task_request: TaskRequest, available_tools: List[ToolInfo]) -> Tuple[List[ExecutionStep], Dict[str, int]]:
         """使用Claude API分析任务"""
         
         # 构建工具描述
@@ -183,7 +184,14 @@ class TaskExecutor:
             result = response.json()
             claude_response = result["content"][0]["text"]
             
-            return self._parse_claude_response(claude_response)
+            # 提取token使用情况
+            token_usage = {}
+            if "usage" in result:
+                usage = result["usage"]
+                token_usage[settings.claude_model] = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+            
+            execution_steps = self._parse_claude_response(claude_response)
+            return execution_steps, token_usage
             
         except Exception as e:
             logger.error(f"Claude API分析失败: {e}")
@@ -352,6 +360,227 @@ class TaskExecutor:
         
         return summary.strip()
     
+    async def _generate_tool_arguments_with_ai(self, tool: ToolInfo, task_description: str) -> Tuple[Dict[str, Any], Dict[str, int]]:
+        """使用AI生成工具调用参数"""
+        
+        # 构建工具描述
+        tool_desc = f"**{tool.name}**: {tool.description}"
+        if tool.input_schema and "properties" in tool.input_schema:
+            props = tool.input_schema["properties"]
+            params = []
+            for param_name, param_info in props.items():
+                param_desc = param_name
+                if "type" in param_info:
+                    param_desc += f" ({param_info['type']})"
+                if "description" in param_info:
+                    param_desc += f": {param_info['description']}"
+                params.append(param_desc)
+            
+            if params:
+                tool_desc += f"\n  参数: {', '.join(params)}"
+        
+        # 构建提示
+        prompt = f"""你是一个智能工具调用助手，需要根据用户任务描述为指定工具生成合适的调用参数。
+
+**工具信息**: 
+{tool_desc}
+
+**用户任务**: {task_description}
+
+**要求**:
+1. 仔细分析工具的输入参数要求
+2. 根据任务描述推断合理的参数值
+3. 如果是文件系统操作，参数通常需要包装在"req"对象中
+4. 确保参数格式与工具定义完全匹配
+5. 如果任务涉及文件路径，使用相对路径
+
+**输出格式** (严格按照JSON格式):
+```json
+{{
+  "参数名": "参数值"
+}}
+```
+
+请生成工具调用参数："""
+
+        try:
+            headers = {
+                "Content-Type": "application/json",
+                "x-api-key": self.api_key,
+                "anthropic-version": "2023-06-01"
+            }
+            
+            payload = {
+                "model": settings.claude_model,
+                "max_tokens": 2000,
+                "messages": [{"role": "user", "content": prompt}]
+            }
+            
+            response = await self.http_client.post(CLAUDE_API_URL, headers=headers, json=payload)
+            
+            if response.status_code != 200:
+                raise Exception(f"Claude API调用失败: {response.status_code} - {response.text}")
+            
+            result = response.json()
+            claude_response = result["content"][0]["text"]
+            
+            # 提取token使用情况
+            token_usage = {}
+            if "usage" in result:
+                usage = result["usage"]
+                token_usage[settings.claude_model] = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+            
+            # 解析参数
+            arguments = self._parse_tool_arguments(claude_response)
+            
+            return arguments, token_usage
+            
+        except Exception as e:
+            logger.error(f"Claude API生成参数失败: {e}")
+            raise Exception(f"参数生成失败: {str(e)}")
+    
+    def _parse_tool_arguments(self, claude_response: str) -> Dict[str, Any]:
+        """解析Claude响应的工具参数"""
+        try:
+            # 提取JSON部分
+            json_start = claude_response.find("```json")
+            if json_start != -1:
+                json_start += 7  # len("```json")
+                json_end = claude_response.find("```", json_start)
+                if json_end != -1:
+                    json_str = claude_response[json_start:json_end].strip()
+                else:
+                    json_str = claude_response[json_start:].strip()
+            else:
+                # 尝试直接解析
+                json_str = claude_response.strip()
+            
+            # 解析JSON
+            arguments = json.loads(json_str)
+            
+            logger.info(f"解析出工具参数: {arguments}")
+            return arguments
+            
+        except Exception as e:
+            logger.error(f"工具参数解析失败: {e}")
+            logger.debug(f"Claude响应内容: {claude_response}")
+            raise Exception(f"工具参数解析失败: {str(e)}")
+    
+    async def _select_tool_and_generate_arguments(self, available_tools: List[ToolInfo], 
+                                                 task_description: str, mcp_server_name: str) -> Tuple[ToolInfo, Dict[str, Any], Dict[str, int]]:
+        """使用AI选择合适的工具并生成参数"""
+        
+        # 构建工具列表描述
+        tools_desc = self._format_tools_description(available_tools)
+        
+        # 构建提示
+        prompt = f"""你是一个智能工具选择和参数生成助手。用户想在MCP服务器 '{mcp_server_name}' 上执行任务，你需要选择最合适的工具并生成调用参数。
+
+**用户任务**: {task_description}
+
+**MCP服务器**: {mcp_server_name}
+
+**可用工具**:
+{tools_desc}
+
+**要求**:
+1. 根据任务描述选择最合适的工具
+2. 为选定的工具生成合适的调用参数
+3. 如果是文件系统操作，参数通常需要包装在"req"对象中
+4. 确保参数格式与工具定义完全匹配
+5. 如果任务涉及文件路径，使用相对路径
+
+**输出格式** (严格按照JSON格式):
+```json
+{{
+  "selected_tool": "工具名称",
+  "arguments": {{
+    "参数名": "参数值"
+  }}
+}}
+```
+
+请选择工具并生成参数："""
+
+        try:
+            headers = {
+                "Content-Type": "application/json",
+                "x-api-key": self.api_key,
+                "anthropic-version": "2023-06-01"
+            }
+            
+            payload = {
+                "model": settings.claude_model,
+                "max_tokens": 2000,
+                "messages": [{"role": "user", "content": prompt}]
+            }
+            
+            response = await self.http_client.post(CLAUDE_API_URL, headers=headers, json=payload)
+            
+            if response.status_code != 200:
+                raise Exception(f"Claude API调用失败: {response.status_code} - {response.text}")
+            
+            result = response.json()
+            claude_response = result["content"][0]["text"]
+            
+            # 提取token使用情况
+            token_usage = {}
+            if "usage" in result:
+                usage = result["usage"]
+                token_usage[settings.claude_model] = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+            
+            # 解析选择的工具和参数
+            tool_selection = self._parse_tool_selection(claude_response)
+            selected_tool_name = tool_selection["selected_tool"]
+            arguments = tool_selection["arguments"]
+            
+            # 找到选定的工具对象
+            selected_tool = None
+            for tool in available_tools:
+                if tool.name == selected_tool_name:
+                    selected_tool = tool
+                    break
+            
+            if not selected_tool:
+                raise Exception(f"AI选择的工具不存在: {selected_tool_name}")
+            
+            return selected_tool, arguments, token_usage
+            
+        except Exception as e:
+            logger.error(f"工具选择和参数生成失败: {e}")
+            raise Exception(f"工具选择失败: {str(e)}")
+    
+    def _parse_tool_selection(self, claude_response: str) -> Dict[str, Any]:
+        """解析Claude响应的工具选择"""
+        try:
+            # 提取JSON部分
+            json_start = claude_response.find("```json")
+            if json_start != -1:
+                json_start += 7  # len("```json")
+                json_end = claude_response.find("```", json_start)
+                if json_end != -1:
+                    json_str = claude_response[json_start:json_end].strip()
+                else:
+                    json_str = claude_response[json_start:].strip()
+            else:
+                # 尝试直接解析
+                json_str = claude_response.strip()
+            
+            # 解析JSON
+            selection = json.loads(json_str)
+            
+            if "selected_tool" not in selection or "arguments" not in selection:
+                raise ValueError("响应格式不正确，缺少必需字段")
+            
+            logger.info(f"AI选择的工具: {selection['selected_tool']}")
+            logger.info(f"生成的参数: {selection['arguments']}")
+            return selection
+            
+        except Exception as e:
+            logger.error(f"工具选择解析失败: {e}")
+            logger.debug(f"Claude响应内容: {claude_response}")
+            raise Exception(f"工具选择解析失败: {str(e)}")
+    
     async def close(self):
         """关闭HTTP客户端"""
         await self.http_client.aclose()
@@ -378,3 +607,73 @@ async def execute_intelligent_task(
     
     executor = TaskExecutor(client_manager)
     return await executor.execute_task(task_request)
+
+
+async def execute_smart_tool_call(
+    client_manager: ClientManager,
+    mcp_server_name: str,
+    task_description: str,
+    vm_id: str,
+    session_id: str
+) -> SmartToolResult:
+    """执行智能工具调用的便捷函数"""
+    start_time = datetime.now()
+    
+    try:
+        # 1. 获取指定客户机
+        client = await client_manager.get_client(vm_id, session_id)
+        if not client:
+            raise Exception(f"客户机不存在: {vm_id}/{session_id}")
+        
+        # 2. 获取指定服务器的工具
+        server = await client.get_server(mcp_server_name)
+        if not server or not server.connected:
+            raise Exception(f"服务器不存在或未连接: {mcp_server_name}")
+        
+        server_tools = await server.get_tools(vm_id, session_id)
+        if not server_tools:
+            raise Exception(f"服务器 {mcp_server_name} 没有可用工具")
+        
+        # 3. 使用AI选择合适的工具并生成参数
+        executor = TaskExecutor(client_manager)
+        selected_tool, arguments, token_usage = await executor._select_tool_and_generate_arguments(
+            server_tools, task_description, mcp_server_name
+        )
+        
+        # 4. 调用选定的工具
+        result = await server.call_tool(selected_tool.name, arguments)
+        
+        # 5. 生成完成摘要
+        summary = f"成功在服务器 '{mcp_server_name}' 上使用工具 '{selected_tool.name}' 完成任务: {task_description}"
+        
+        execution_time = (datetime.now() - start_time).total_seconds()
+        
+        return SmartToolResult(
+            success=True,
+            mcp_server_name=mcp_server_name,
+            selected_tool_name=selected_tool.name,
+            vm_id=vm_id,
+            session_id=session_id,
+            task_description=task_description,
+            result=result,
+            completion_summary=summary,
+            execution_time_seconds=execution_time,
+            token_usage=token_usage
+        )
+        
+    except Exception as e:
+        execution_time = (datetime.now() - start_time).total_seconds()
+        error_summary = f"智能工具调用失败: {str(e)}"
+        
+        return SmartToolResult(
+            success=False,
+            mcp_server_name=mcp_server_name,
+            selected_tool_name=None,
+            vm_id=vm_id,
+            session_id=session_id,
+            task_description=task_description,
+            result=None,
+            completion_summary=error_summary,
+            execution_time_seconds=execution_time,
+            error_message=str(e)
+        )

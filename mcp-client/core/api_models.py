@@ -23,8 +23,10 @@ class ClientInfo(BaseModel):
     """客户机信息"""
     vm_id: str = Field(..., description="虚拟机ID")
     session_id: str = Field(..., description="会话ID") 
-    remote_url: str = Field(..., description="远程MCP服务器地址")
-    description: str = Field("", description="客户机描述")
+    name: str = Field(..., description="服务器名称")
+    url: str = Field(..., description="远程MCP服务器地址")
+    description: str = Field("", description="服务器描述")
+    transport: str = Field("http", description="传输协议")
 
 
 class ClientStatus(BaseModel):
@@ -34,7 +36,8 @@ class ClientStatus(BaseModel):
     status: str  # connected, disconnected, error
     tool_count: int
     resource_count: int
-    remote_url: str
+    server_count: int
+    connected_servers: List[str]
     last_seen: Optional[str] = None
 
 
@@ -46,6 +49,7 @@ class ToolCall(BaseModel):
     arguments: Dict[str, Any] = Field(default_factory=dict, description="工具参数")
     vm_id: str = Field(..., description="虚拟机ID")
     session_id: str = Field(..., description="会话ID")
+    server_name: Optional[str] = Field(None, description="指定服务器名称")
 
 
 class ToolFindCall(BaseModel):
@@ -55,12 +59,21 @@ class ToolFindCall(BaseModel):
     preferred_vm_id: Optional[str] = Field(None, description="优先使用的虚拟机ID")
 
 
+class SmartToolCall(BaseModel):
+    """智能工具调用请求"""
+    mcp_server_name: str = Field(..., description="MCP服务器名称 (如: filesystem, audio_slicer)")
+    task_description: str = Field(..., description="要执行的任务描述")
+    vm_id: str = Field(..., description="虚拟机ID")
+    session_id: str = Field(..., description="会话ID")
+
+
 class ToolInfo(BaseModel):
     """工具信息"""
     name: str
     description: str
     vm_id: str
     session_id: str
+    server_name: str
     input_schema: Dict[str, Any]
 
 
@@ -80,6 +93,8 @@ class ResourceInfo(BaseModel):
     description: str
     vm_id: str
     session_id: str
+    server_name: str
+    mimeType: Optional[str] = None
 
 
 # === 服务器注册模型 ===
@@ -115,6 +130,22 @@ class TaskResult(BaseModel):
     final_result: str
     summary: str
     execution_time_seconds: float
+    error_message: Optional[str] = None
+    token_usage: Optional[Dict[str, int]] = None
+
+
+class SmartToolResult(BaseModel):
+    """智能工具调用结果"""
+    success: bool
+    mcp_server_name: str
+    selected_tool_name: Optional[str] = None
+    vm_id: str
+    session_id: str
+    task_description: str
+    result: Any
+    completion_summary: str
+    execution_time_seconds: float
+    token_usage: Optional[Dict[str, int]] = None
     error_message: Optional[str] = None
 
 

@@ -7,10 +7,18 @@ Copy this file and modify it to create your own server.
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
+import os
+import sys
+from pathlib import Path
+
+# Import base directory manager
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from base_dir_decorator import get_base_dir_manager
 
 
 class EchoRequest(BaseModel):
     message: str = Field(description="Message to echo back")
+    session_id: str = Field(default=None, description="Session ID for workspace isolation")
 
 
 mcp = FastMCP(
@@ -34,10 +42,15 @@ def echo(req: EchoRequest) -> dict:
     """
     from datetime import datetime
     
+    # Get base directory information
+    base_dir_manager = get_base_dir_manager()
+    base_dir = str(base_dir_manager.get_base_dir())
+    
     return {
         "echoed_message": req.message,
         "timestamp": datetime.now().isoformat(),
-        "server_name": "ExampleServer"
+        "server_name": "ExampleServer",
+        "base_directory": base_dir
     }
 
 

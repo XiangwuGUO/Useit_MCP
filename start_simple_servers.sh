@@ -33,7 +33,7 @@ show_help() {
     echo ""
     echo "命令:"
     echo "  start         启动服务器 (本地模式)"
-    echo "  start-frp     启动服务器 (FRP远程注册模式)" 
+    echo "  start-frp [vm_id] [session_id] [base_dir]  启动服务器 (FRP远程注册模式)" 
     echo "  stop          停止所有服务器"
     echo "  restart       重启服务器"
     echo "  status        显示服务器状态"
@@ -47,9 +47,14 @@ show_help() {
     echo ""
     echo "示例:"
     echo "  $0 start                    # 本地模式启动"
-    echo "  $0 start-frp                # FRP模式启动"
+    echo "  $0 start-frp vm123 sess456  # FRP模式启动(带vm_id和session_id)"
+    echo "  $0 start-frp vm123 sess456 /tmp/mcp_workspace  # 指定基础目录"
     echo "  $0 single audio_slicer      # 启动单个服务器"
     echo "  $0 status                   # 查看状态"
+    echo ""
+    echo "注意:"
+    echo "  - FRP模式会生成 mcp_server_frp.json 配置文件"
+    echo "  - 此文件包含服务器连接信息，可用于MCP客户端注册"
 }
 
 # 检查Python和依赖
@@ -80,6 +85,13 @@ get_status() {
             cd "$PROJECT_DIR/mcp-server"
             python3 simple_launcher.py --status 2>/dev/null || echo "  无法获取详细状态"
             
+            # 检查FRP配置文件是否存在
+            local frp_json="$PROJECT_DIR/mcp_server_frp.json"
+            if [ -f "$frp_json" ]; then
+                echo -e "${GREEN}📄 FRP配置文件: $frp_json${NC}"
+                echo -e "${BLUE}📋 服务器数量: $(python3 -c "import json; print(len(json.load(open('$frp_json'))['servers']))" 2>/dev/null || echo "未知")${NC}"
+            fi
+            
             return 0
         else
             echo -e "${YELLOW}⚠️ PID文件存在但进程不存在${NC}"
@@ -95,16 +107,19 @@ get_status() {
 # 启动服务器
 start_servers() {
     local enable_frp="$1"
-    local extra_args="$2"
+    local vm_id="$2"
+    local session_id="$3"
+    local base_dir="$4"
+    local extra_args="$5"
     
     echo -e "${BLUE}🚀 启动MCP服务器...${NC}"
     echo -e "${BLUE}📁 项目目录: $PROJECT_DIR${NC}"
     
-    # 检查是否已经运行
+    # 检查是否已经运行，如果是则先停止
     if [ -f "$PID_FILE" ] && ps -p "$(cat "$PID_FILE")" > /dev/null 2>&1; then
-        echo -e "${YELLOW}⚠️ 服务器已在运行${NC}"
-        get_status
-        return 0
+        echo -e "${YELLOW}⚠️ 服务器已在运行，正在停止...${NC}"
+        stop_servers
+        sleep 2
     fi
     
     # 检查依赖
@@ -113,9 +128,30 @@ start_servers() {
     # 构建启动命令
     local cmd="python3 simple_launcher.py"
     
+    # 添加base_dir参数
+    if [ -n "$base_dir" ]; then
+        cmd="$cmd --base-dir \"$base_dir\""
+        echo -e "${BLUE}📁 基础工作目录: $base_dir${NC}"
+    fi
+    
     if [ "$enable_frp" = "true" ]; then
         cmd="$cmd --enable-frp"
+        
+        # 添加vm_id和session_id参数
+        if [ -n "$vm_id" ]; then
+            cmd="$cmd --vm-id $vm_id"
+        fi
+        if [ -n "$session_id" ]; then
+            cmd="$cmd --session-id $session_id"
+        fi
+        
         echo -e "${BLUE}🌐 启用FRP反向代理模式${NC}"
+        if [ -n "$vm_id" ]; then
+            echo -e "${BLUE}🆔 VM ID: $vm_id${NC}"
+        fi
+        if [ -n "$session_id" ]; then
+            echo -e "${BLUE}📋 Session ID: $session_id${NC}"
+        fi
     else
         echo -e "${BLUE}🔒 本地测试模式${NC}"
     fi
@@ -148,6 +184,22 @@ start_servers() {
         
         if [ "$enable_frp" = "true" ]; then
             echo -e "${GREEN}💡 FRP模式已启用，服务器端MCP客户端现在可以连接${NC}"
+            
+            # 等待frp配置文件生成并输出路径
+            sleep 2
+            local frp_json="$PROJECT_DIR/mcp_server_frp.json"
+            if [ -f "$frp_json" ]; then
+                echo -e "${GREEN}📄 FRP服务器配置文件已生成: $frp_json${NC}"
+                echo -e "${BLUE}📋 可使用此文件配置注册到MCP客户端${NC}"
+            else
+                echo -e "${YELLOW}⚠️ FRP配置文件尚未生成，稍等片刻...${NC}"
+                # 再等待一下
+                sleep 3
+                if [ -f "$frp_json" ]; then
+                    echo -e "${GREEN}📄 FRP服务器配置文件: $frp_json${NC}"
+                    echo -e "${BLUE}📋 可使用此文件配置注册到MCP客户端${NC}"
+                fi
+            fi
         fi
         
         # 显示快速状态
@@ -191,6 +243,14 @@ stop_servers() {
         rm -f "$PID_FILE"
     else
         echo -e "${YELLOW}⚠️ 服务器未运行${NC}"
+    fi
+    
+    # 额外清理：删除可能残留的FRP配置文件
+    local frp_json="$PROJECT_DIR/mcp_server_frp.json"
+    if [ -f "$frp_json" ]; then
+        echo -e "${BLUE}🧹 清理FRP配置文件...${NC}"
+        rm -f "$frp_json"
+        echo -e "${GREEN}✅ FRP配置文件已清理${NC}"
     fi
 }
 
@@ -267,7 +327,12 @@ main() {
             start_servers "false" "$2"
             ;;
         start-frp)
-            start_servers "true" "$2"
+            if [ -z "$2" ] || [ -z "$3" ]; then
+                echo -e "${RED}❌ start-frp 需要 vm_id 和 session_id 参数${NC}"
+                echo "用法: $0 start-frp <vm_id> <session_id> [base_dir]"
+                exit 1
+            fi
+            start_servers "true" "$2" "$3" "$4" "$5"
             ;;
         stop)
             stop_servers

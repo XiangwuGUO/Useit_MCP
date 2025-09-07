@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # 导入核心模块
 from core.api_models import *
 from core.client_manager import ClientManager
-from core.task_executor import execute_intelligent_task
+from core.task_executor import execute_intelligent_task, execute_smart_tool_call
 from config.settings import settings, validate_required_settings
 from utils.helpers import format_duration, timing_decorator
 
@@ -90,7 +90,8 @@ async def root():
                 "stats": "/stats", 
                 "docs": "/docs",
                 "clients": "/clients",
-                "tools": "/tools"
+                "tools": "/tools",
+                "smart_tool_call": "/tools/smart-call"
             }
         }
     )
@@ -109,6 +110,8 @@ async def health_check():
             data={
                 "status": status,
                 "connected_clients": stats["connected_clients"],
+                "total_servers": stats["total_servers"],
+                "connected_servers": stats["connected_servers"],
                 "total_tools": stats["total_tools"],
                 "uptime": format_duration(int((datetime.now() - server_start_time).total_seconds()))
             }
@@ -159,28 +162,32 @@ async def get_stats():
 
 @app.post("/clients", response_model=APIResponse)
 async def add_client(client_info: ClientInfo):
-    """添加MCP客户机"""
+    """添加MCP客户机服务器"""
     try:
-        await client_manager.add_client(
+        await client_manager.add_server_to_client(
             client_info.vm_id,
             client_info.session_id,
-            client_info.remote_url
+            client_info.name,
+            client_info.url,
+            client_info.description
         )
         
-        logger.info(f"✅ 客户机添加成功: {client_info.vm_id}/{client_info.session_id}")
+        logger.info(f"✅ 服务器添加成功: {client_info.name} -> {client_info.vm_id}/{client_info.session_id}")
         
         return APIResponse(
             success=True,
-            message="客户机添加成功",
+            message="服务器添加成功",
             data={
                 "vm_id": client_info.vm_id,
                 "session_id": client_info.session_id,
-                "remote_url": client_info.remote_url
+                "server_name": client_info.name,
+                "url": client_info.url,
+                "description": client_info.description
             }
         )
     except Exception as e:
-        logger.error(f"添加客户机失败: {e}")
-        raise HTTPException(status_code=400, detail=f"添加客户机失败: {e}")
+        logger.error(f"添加服务器失败: {e}")
+        raise HTTPException(status_code=400, detail=f"添加服务器失败: {e}")
 
 
 @app.get("/clients", response_model=APIResponse)
@@ -188,10 +195,38 @@ async def list_clients():
     """列出所有客户机"""
     try:
         clients = await client_manager.get_all_clients()
+        
+        # 添加详细的服务器信息
+        detailed_clients = []
+        for client_status in clients:
+            client = await client_manager.get_client(client_status.vm_id, client_status.session_id)
+            if client:
+                server_details = []
+                for server_name, server in client.servers.items():
+                    server_details.append({
+                        "name": server_name,
+                        "url": server.remote_url,
+                        "description": server.description,
+                        "connected": server.connected,
+                        "last_seen": server.last_seen.isoformat()
+                    })
+                
+                detailed_clients.append({
+                    "vm_id": client_status.vm_id,
+                    "session_id": client_status.session_id,
+                    "status": client_status.status,
+                    "server_count": client_status.server_count,
+                    "connected_servers": client_status.connected_servers,
+                    "tool_count": client_status.tool_count,
+                    "resource_count": client_status.resource_count,
+                    "last_seen": client_status.last_seen,
+                    "servers": server_details
+                })
+        
         return APIResponse(
             success=True,
             message=f"获取到 {len(clients)} 个客户机",
-            data=clients
+            data=detailed_clients
         )
     except Exception as e:
         logger.error(f"获取客户机列表失败: {e}")
@@ -200,7 +235,7 @@ async def list_clients():
 
 @app.delete("/clients/{vm_id}/{session_id}", response_model=APIResponse)
 async def remove_client(vm_id: str, session_id: str):
-    """移除客户机"""
+    """移除整个客户机"""
     try:
         success = await client_manager.remove_client(vm_id, session_id)
         
@@ -216,6 +251,26 @@ async def remove_client(vm_id: str, session_id: str):
     except Exception as e:
         logger.error(f"移除客户机失败: {e}")
         raise HTTPException(status_code=500, detail=f"移除客户机失败: {e}")
+
+
+@app.delete("/clients/{vm_id}/{session_id}/servers/{server_name}", response_model=APIResponse)
+async def remove_server(vm_id: str, session_id: str, server_name: str):
+    """从客户机中移除指定服务器"""
+    try:
+        success = await client_manager.remove_server_from_client(vm_id, session_id, server_name)
+        
+        if success:
+            return APIResponse(
+                success=True,
+                message="服务器移除成功",
+                data={"vm_id": vm_id, "session_id": session_id, "server_name": server_name}
+            )
+        else:
+            raise HTTPException(status_code=404, detail="客户机或服务器不存在")
+            
+    except Exception as e:
+        logger.error(f"移除服务器失败: {e}")
+        raise HTTPException(status_code=500, detail=f"移除服务器失败: {e}")
 
 
 # ============================================================================
@@ -258,12 +313,15 @@ async def call_tool(tool_call: ToolCall):
     """调用工具"""
     try:
         logger.info(f"🔧 调用工具: {tool_call.tool_name} on {tool_call.vm_id}/{tool_call.session_id}")
+        if tool_call.server_name:
+            logger.info(f"   指定服务器: {tool_call.server_name}")
         
         result = await client_manager.call_tool(
             tool_call.vm_id,
             tool_call.session_id,
             tool_call.tool_name,
-            tool_call.arguments
+            tool_call.arguments,
+            tool_call.server_name
         )
         
         return APIResponse(
@@ -273,6 +331,7 @@ async def call_tool(tool_call: ToolCall):
                 "tool_name": tool_call.tool_name,
                 "vm_id": tool_call.vm_id,
                 "session_id": tool_call.session_id,
+                "server_name": tool_call.server_name,
                 "result": result
             }
         )
@@ -306,6 +365,31 @@ async def find_and_call_tool(tool_call: ToolFindCall):
     except Exception as e:
         logger.error(f"工具查找调用失败: {e}")
         raise HTTPException(status_code=500, detail=f"工具查找调用失败: {e}")
+
+
+@app.post("/tools/smart-call", response_model=APIResponse)
+@timing_decorator
+async def smart_call_tool(smart_call: SmartToolCall):
+    """智能工具调用 - 使用AI根据描述生成参数并执行工具"""
+    try:
+        logger.info(f"🧠 智能调用服务器: {smart_call.mcp_server_name} - {smart_call.task_description[:50]}...")
+        
+        result = await execute_smart_tool_call(
+            client_manager,
+            smart_call.mcp_server_name,
+            smart_call.task_description,
+            smart_call.vm_id,
+            smart_call.session_id
+        )
+        
+        return APIResponse(
+            success=result.success,
+            message=f"智能工具调用{'成功' if result.success else '失败'}",
+            data=result.dict()
+        )
+    except Exception as e:
+        logger.error(f"智能工具调用失败: {e}")
+        raise HTTPException(status_code=500, detail=f"智能工具调用失败: {e}")
 
 
 # ============================================================================
@@ -360,9 +444,8 @@ async def register_server(server_info: ServerRegistrationInfo):
         if not name or not url:
             raise ValueError("name 和 url 是必需的")
         
-        # 将服务器作为客户机添加
-        # 使用服务器名称作为vm_id和session_id
-        await client_manager.add_client(name, "auto", url)
+        # 使用服务器名称作为vm_id和session_id（兼容旧行为）
+        await client_manager.add_server_to_client(name, "auto", name, url, description)
         
         logger.info(f"✅ 服务器注册成功: {name} -> {url}")
         

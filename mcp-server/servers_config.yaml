@@ -29,8 +29,7 @@ custom_servers:
 
 # Official servers are automatically included with tunnel support:
 # - audio_slicer: Audio slicing service (port 8002) [🌐 隧道启用]
-# - filesystem: Sandboxed filesystem operations (port 8003) [🌐 隧道启用]  
-# - web_search: Web search using OpenAI API (port 8004) [🌐 隧道启用]
+# - filesystem: Sandboxed filesystem operations (port 8003) [🌐 隧道启用]
 
 # FRP隧道功能说明:
 # - enable_tunnel: 是否为此服务器启用FRP隧道

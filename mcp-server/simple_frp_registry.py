@@ -7,10 +7,10 @@
 import os
 import sys
 import time
-import requests
+import json
 from pathlib import Path
 from typing import Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 
 # 尝试导入FRP隧道模块
 try:
@@ -35,6 +35,8 @@ class ServerRegistrationConfig:
     description: str = ""
     enable_frp: bool = False  # 是否启用FRP反向代理
     registry_url: str = "http://localhost:8080"  # MCP客户端注册地址
+    vm_id: str = ""  # 虚拟机ID
+    session_id: str = ""  # 会话ID
     
 
 class SimpleFRPRegistry:
@@ -43,6 +45,7 @@ class SimpleFRPRegistry:
     def __init__(self):
         self.active_tunnels = {}  # server_name -> tunnel
         self.registered_servers = {}  # server_name -> registration info
+        self.json_file_path = "../mcp_server_frp.json"  # 统一的JSON文件路径（项目根目录）
         
     def register_server(self, config: ServerRegistrationConfig) -> dict:
         """
@@ -95,57 +98,81 @@ class SimpleFRPRegistry:
         elif config.enable_frp and not FRP_AVAILABLE:
             print(f"⚠️ FRP 功能未可用，将使用本地地址注册")
         
-        # 注册到MCP客户端
+        # 生成注册信息JSON文件
         registration_url = registration_info["public_url"] or registration_info["local_url"]
-        success = self._register_to_client(config, registration_url)
+        self._export_registration_json(config, registration_url, registration_info)
         
-        if success:
-            self.registered_servers[config.server_name] = registration_info
-            print(f"✅ 服务器 {config.server_name} 注册成功")
-            print(f"   本地地址: {local_url}")
-            if registration_info["public_url"]:
-                print(f"   公网地址: {registration_info['public_url']}")
-                print(f"   注册地址: {registration_info['public_url']} (FRP)")
-            else:
-                print(f"   注册地址: {local_url} (本地)")
+        self.registered_servers[config.server_name] = registration_info
+        print(f"✅ 服务器 {config.server_name} 配置完成")
+        print(f"   本地地址: {local_url}")
+        if registration_info["public_url"]:
+            print(f"   公网地址: {registration_info['public_url']}")
+            print(f"   注册文件: ./{self.json_file_path}")
         else:
-            print(f"❌ 服务器 {config.server_name} 注册失败")
-            # 如果注册失败，清理隧道
-            if config.server_name in self.active_tunnels:
-                self.active_tunnels[config.server_name].stop_tunnel()
-                del self.active_tunnels[config.server_name]
+            print(f"   注册文件: ./{self.json_file_path} (本地模式)")
         
         return registration_info
     
-    def _register_to_client(self, config: ServerRegistrationConfig, registration_url: str) -> bool:
-        """向MCP客户端注册服务器"""
+    def _export_registration_json(self, config: ServerRegistrationConfig, registration_url: str, registration_info: dict):
+        """更新统一的JSON注册文件"""
         try:
-            register_data = {
+            server_data = {
                 "name": config.server_name,
                 "url": registration_url,
                 "description": config.description,
-                "transport": "http"
+                "transport": "http",
+                "local_url": registration_info["local_url"],
+                "public_url": registration_info["public_url"],
+                "frp_enabled": registration_info["frp_enabled"],
+                "timestamp": int(time.time())
             }
             
-            # 尝试注册
-            response = requests.post(
-                f"{config.registry_url}/servers/register",
-                json=register_data,
-                timeout=10
-            )
+            # 读取现有的JSON文件
+            existing_data = {
+                "vm_id": config.vm_id,
+                "session_id": config.session_id,
+                "registry_url": config.registry_url,
+                "servers": []
+            }
             
-            if response.status_code in [200, 201]:
-                return True
+            if os.path.exists(self.json_file_path):
+                try:
+                    with open(self.json_file_path, 'r', encoding='utf-8') as f:
+                        existing_data = json.load(f)
+                        # 确保必须的字段存在并更新
+                        if "vm_id" not in existing_data:
+                            existing_data["vm_id"] = config.vm_id
+                        else:
+                            existing_data["vm_id"] = config.vm_id  # 更新为最新值
+                        if "session_id" not in existing_data:
+                            existing_data["session_id"] = config.session_id
+                        else:
+                            existing_data["session_id"] = config.session_id  # 更新为最新值
+                        if "servers" not in existing_data:
+                            existing_data["servers"] = []
+                except:
+                    pass  # 使用默认数据
+            
+            # 更新或添加服务器
+            servers = existing_data["servers"]
+            server_index = next((i for i, s in enumerate(servers) if s["name"] == config.server_name), -1)
+            
+            if server_index >= 0:
+                servers[server_index] = server_data
             else:
-                print(f"注册失败，状态码: {response.status_code}, 响应: {response.text}")
-                return False
+                servers.append(server_data)
+            
+            # 更新registry_url
+            existing_data["registry_url"] = config.registry_url
+            
+            # 写入JSON文件
+            with open(self.json_file_path, 'w', encoding='utf-8') as f:
+                json.dump(existing_data, f, indent=2, ensure_ascii=False)
+            
+            print(f"✅ 注册信息已更新到: {self.json_file_path}")
                 
-        except requests.exceptions.RequestException as e:
-            print(f"注册请求失败: {e}")
-            return False
         except Exception as e:
-            print(f"注册过程出错: {e}")
-            return False
+            print(f"❌ 导出注册信息失败: {e}")
     
     def unregister_server(self, server_name: str) -> bool:
         """取消注册服务器并停止隧道"""
@@ -167,6 +194,23 @@ class SimpleFRPRegistry:
         if server_name in self.registered_servers:
             del self.registered_servers[server_name]
         
+        # 从统一JSON文件中移除服务器
+        try:
+            if os.path.exists(self.json_file_path):
+                with open(self.json_file_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                # 移除指定服务器
+                if "servers" in data:
+                    data["servers"] = [s for s in data["servers"] if s["name"] != server_name]
+                    
+                    with open(self.json_file_path, 'w', encoding='utf-8') as f:
+                        json.dump(data, f, indent=2, ensure_ascii=False)
+                    
+                    print(f"✅ 已从JSON文件中移除: {server_name}")
+        except Exception as e:
+            print(f"❌ 更新JSON文件失败: {e}")
+        
         return success
     
     def unregister_all_servers(self):
@@ -175,6 +219,14 @@ class SimpleFRPRegistry:
         
         for server_name in list(self.active_tunnels.keys()):
             self.unregister_server(server_name)
+        
+        # 清理统一JSON文件
+        try:
+            if os.path.exists(self.json_file_path):
+                os.remove(self.json_file_path)
+                print(f"✅ 已删除JSON注册文件: {self.json_file_path}")
+        except Exception as e:
+            print(f"❌ 删除JSON文件失败: {e}")
         
         print("✅ 所有隧道和注册已清理")
     
@@ -210,7 +262,9 @@ def register_mcp_server(
     local_host: str = "127.0.0.1", 
     description: str = "",
     enable_frp: bool = False,
-    registry_url: str = None
+    registry_url: str = None,
+    vm_id: str = "",
+    session_id: str = ""
 ) -> dict:
     """
     便捷函数：注册MCP服务器
@@ -222,6 +276,8 @@ def register_mcp_server(
         description: 服务器描述
         enable_frp: 是否启用FRP反向代理
         registry_url: MCP客户端注册地址
+        vm_id: 虚拟机ID
+        session_id: 会话ID
         
     Returns:
         注册信息字典
@@ -235,7 +291,9 @@ def register_mcp_server(
         local_host=local_host,
         description=description,
         enable_frp=enable_frp,
-        registry_url=registry_url
+        registry_url=registry_url,
+        vm_id=vm_id,
+        session_id=session_id
     )
     
     registry = get_registry()
@@ -287,10 +345,12 @@ if __name__ == "__main__":
         registry_url=args.registry_url
     )
     
+    print(f"\n🎉 服务器配置完成！")
+    print(f"📄 注册信息已保存到: mcp_server_frp.json")
+    
     if registration_info["frp_enabled"]:
-        print(f"\n🎉 服务器注册成功！")
-        print(f"💡 服务器端MCP客户端现在可以通过公网地址连接到此服务器")
-        print(f"🔗 公网地址: {registration_info['public_url']}")
+        print(f"🌐 FRP隧道已创建: {registration_info['public_url']}")
+        print(f"💡 请通过安全通道传输JSON文件到服务器端进行注册")
         print(f"\n按 Ctrl+C 停止服务...")
         
         # 保持运行
@@ -305,4 +365,4 @@ if __name__ == "__main__":
         except KeyboardInterrupt:
             pass
     else:
-        print(f"\n✅ 服务器注册完成（本地模式）")
+        print(f"💡 本地模式: 请通过安全通道传输JSON文件到服务器端进行注册")

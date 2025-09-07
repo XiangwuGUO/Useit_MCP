@@ -107,6 +107,9 @@ gateway.log*
 mcp_servers.log*
 *.sock
 
+# MCP registration files
+mcp_server_frp.json
+
 # Backup files
 *_backup.py
 *_complex.py

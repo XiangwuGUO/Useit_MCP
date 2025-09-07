@@ -71,7 +71,6 @@ useit-mcp/
 **可用服务器**:
 - `filesystem` (端口8003) - 文件系统操作
 - `audio_slicer` (端口8002) - 音频处理
-- `web_search` (端口8004) - 网页搜索
 
 ## 🔄 两种运行模式
 
@@ -159,7 +158,6 @@ export ANTHROPIC_API_KEY="your-api-key"
 | MCP网关客户端 | 8080 | API网关入口 |
 | 音频切片服务器 | 8002 | audio_slicer |
 | 文件系统服务器 | 8003 | filesystem |
-| 网页搜索服务器 | 8004 | web_search |
 | 自定义服务器 | 8005+ | 根据配置分配 |
 
 ## 🛠️ 开发工作流
