@@ -42,10 +42,16 @@ class ServerRegistrationConfig:
 class SimpleFRPRegistry:
     """简化的FRP注册器"""
     
-    def __init__(self):
+    def __init__(self, base_dir=None):
         self.active_tunnels = {}  # server_name -> tunnel
         self.registered_servers = {}  # server_name -> registration info
-        self.json_file_path = "../mcp_server_frp.json"  # 统一的JSON文件路径（项目根目录）
+        self.base_dir = base_dir or os.environ.get('MCP_BASE_DIR', os.path.join(os.getcwd(), 'mcp_workspace'))
+        
+        # 确保.useit目录存在
+        useit_dir = os.path.join(self.base_dir, '.useit')
+        os.makedirs(useit_dir, exist_ok=True)
+        
+        self.json_file_path = os.path.join(useit_dir, "mcp_server_frp.json")
         
     def register_server(self, config: ServerRegistrationConfig) -> dict:
         """
@@ -248,11 +254,11 @@ class SimpleFRPRegistry:
 # 全局注册器实例
 _registry_instance = None
 
-def get_registry() -> SimpleFRPRegistry:
+def get_registry(base_dir=None) -> SimpleFRPRegistry:
     """获取全局注册器实例"""
     global _registry_instance
     if _registry_instance is None:
-        _registry_instance = SimpleFRPRegistry()
+        _registry_instance = SimpleFRPRegistry(base_dir)
     return _registry_instance
 
 
@@ -264,7 +270,8 @@ def register_mcp_server(
     enable_frp: bool = False,
     registry_url: str = None,
     vm_id: str = "",
-    session_id: str = ""
+    session_id: str = "",
+    base_dir: str = None
 ) -> dict:
     """
     便捷函数：注册MCP服务器
@@ -278,6 +285,7 @@ def register_mcp_server(
         registry_url: MCP客户端注册地址
         vm_id: 虚拟机ID
         session_id: 会话ID
+        base_dir: 基础工作目录
         
     Returns:
         注册信息字典
@@ -296,7 +304,7 @@ def register_mcp_server(
         session_id=session_id
     )
     
-    registry = get_registry()
+    registry = get_registry(base_dir)
     return registry.register_server(config)
 
 

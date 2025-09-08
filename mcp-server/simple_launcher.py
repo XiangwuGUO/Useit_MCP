@@ -117,6 +117,7 @@ class SimpleMCPLauncher:
         self.session_id = ""  # 会话ID
         self._cleanup_registered = False
         self.active_frp_tunnels = {}  # 存储隧道ID而不是隧道对象
+        self.base_dir = os.environ.get('MCP_BASE_DIR', os.path.join(os.getcwd(), 'mcp_workspace'))
         
     def _register_cleanup(self):
         """注册退出清理（仅在实际启动服务器时调用）"""
@@ -288,6 +289,10 @@ class SimpleMCPLauncher:
             import json
             import time
             
+            # 确保.useit目录存在
+            useit_dir = os.path.join(self.base_dir, '.useit')
+            os.makedirs(useit_dir, exist_ok=True)
+            
             # 创建FRP隧道并构建服务器列表
             servers = []
             
@@ -361,8 +366,8 @@ class SimpleMCPLauncher:
                 "servers": servers
             }
             
-            # 写入文件到项目根目录
-            json_file = "../mcp_server_frp.json"
+            # 写入文件到base_dir/.useit/目录
+            json_file = os.path.join(useit_dir, "mcp_server_frp.json")
             with open(json_file, 'w', encoding='utf-8') as f:
                 json.dump(json_data, f, indent=2, ensure_ascii=False)
             
@@ -380,6 +385,10 @@ class SimpleMCPLauncher:
         try:
             import json
             import time
+            
+            # 确保.useit目录存在
+            useit_dir = os.path.join(self.base_dir, '.useit')
+            os.makedirs(useit_dir, exist_ok=True)
             
             port = self._extract_port_from_address(address)
             public_url = None
@@ -443,8 +452,8 @@ class SimpleMCPLauncher:
                 "servers": [server_data]
             }
             
-            # 写入文件到项目根目录
-            json_file = "../mcp_server_frp.json"
+            # 写入文件到base_dir/.useit/目录
+            json_file = os.path.join(useit_dir, "mcp_server_frp.json")
             with open(json_file, 'w', encoding='utf-8') as f:
                 json.dump(json_data, f, indent=2, ensure_ascii=False)
             
@@ -497,7 +506,7 @@ class SimpleMCPLauncher:
             # 删除JSON文件
             try:
                 import os
-                json_file = "../mcp_server_frp.json"
+                json_file = os.path.join(self.base_dir, '.useit', 'mcp_server_frp.json')
                 if os.path.exists(json_file):
                     os.remove(json_file)
                     print(f"✅ 已删除JSON文件: {json_file}")
@@ -515,7 +524,8 @@ class SimpleMCPLauncher:
                     # 从JSON文件获取FRP信息
                     try:
                         import json
-                        with open("../mcp_server_frp.json", 'r') as f:
+                        json_file = os.path.join(self.base_dir, '.useit', 'mcp_server_frp.json')
+                        with open(json_file, 'r') as f:
                             json_data = json.load(f)
                             server_info = next((s for s in json_data['servers'] if s['name'] == name), None)
                             if server_info and server_info.get('public_url'):
@@ -560,6 +570,7 @@ def main():
     base_dir = os.path.abspath(args.base_dir.strip('"\''))  # 移除可能的引号
     os.makedirs(base_dir, exist_ok=True)
     os.environ['MCP_BASE_DIR'] = base_dir
+    launcher.base_dir = base_dir  # 直接设置launcher的base_dir
     print(f"📁 MCP基础工作目录: {base_dir}")
     
     # 检查FRP模式必需参数

@@ -95,7 +95,7 @@ GET  /docs                      # API文档
 ./start_simple_servers.sh start                              # 本地模式
 ./start_simple_servers.sh start-frp vm123 sess456           # FRP模式（默认目录）
 ./start_simple_servers.sh start-frp vm123 sess456 /custom/dir  # FRP模式（指定目录）
-
+./start_simple_servers.sh start-frp vm123 sess456 /home/ubuntu/workspace/gxw/useit_mcp_new/useit_mcp_test_dir
 # 管理操作
 ./start_simple_servers.sh stop                              # 停止服务器
 ./start_simple_servers.sh status                            # 查看状态

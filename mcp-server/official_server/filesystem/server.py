@@ -714,7 +714,10 @@ def _is_text_file(file_path: Path) -> bool:
 @mcp.tool()
 def sync_files_to_target(req: SyncRequest) -> SyncResult:
     """
-    将本地BASE_DIR中的支持文件同步到目标路径。
+    将本地BASE_DIR中的支持文件同步到目标路径，保持完整的目录结构。
+    
+    同步结构: BASE_DIR/* -> target_base_path/vm_id_session_id/*
+    例如: BASE_DIR/.useit/123.txt -> target_base_path/vm_id_session_id/.useit/123.txt
     
     支持的文件类型: txt, md, pdf, doc, docx, ppt, pptx, xls, xlsx, json, yaml, csv, rtf
     文件大小限制: 50MB
@@ -723,16 +726,12 @@ def sync_files_to_target(req: SyncRequest) -> SyncResult:
     try:
         result = SyncResult(success=False, message="")
         
-        # 构造目标路径 - 保持原有目录结构
+        # 构造目标路径 - 直接保持base_dir的完整目录结构
         target_base_path = Path(req.target_base_path) / f"{req.vm_id}_{req.session_id}"
-        target_mcp_files = target_base_path / "mcp_files"
-        target_uploaded_files = target_base_path / "uploaded_files"
         
         # 无论是否dry_run都创建基础目录结构，用于验证路径和权限
         try:
             target_base_path.mkdir(parents=True, exist_ok=True)
-            target_mcp_files.mkdir(parents=True, exist_ok=True) 
-            target_uploaded_files.mkdir(parents=True, exist_ok=True)
         except Exception as e:
             result.message = f"无法创建目标目录: {e}"
             return result
@@ -769,8 +768,8 @@ def sync_files_to_target(req: SyncRequest) -> SyncResult:
                     error_count += 1
                     continue
                 
-                # 构造目标路径 - 在mcp_files下保持原有目录结构
-                target_file_path = target_mcp_files / relative_path
+                # 构造目标路径 - 直接在目标基础路径下保持原有目录结构
+                target_file_path = target_base_path / relative_path
                 
                 # 检查是否需要同步
                 need_sync = req.force_sync

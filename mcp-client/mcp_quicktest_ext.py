@@ -4,11 +4,12 @@ import os
 from typing import Optional, Dict, Any
 from pathlib import Path
 
+MCP_BASE_DIR = "/mnt/efs/data/useit/users_workspace"
 
-def register_from_json(mcp_client_url: str, vm_id: str, session_id: str) -> bool:
+def register_from_json(mcp_client_url: str, vm_id: str, session_id: str, json_path: str=None) -> bool:
     """从JSON文件注册服务器到MCP客户端"""
-    json_file = Path("../mcp_server_frp.json")
-    
+    json_path = json_path or os.path.join(MCP_BASE_DIR, f"{vm_id}_{session_id}/.useit/mcp_server_frp.json")
+    json_file = Path(json_path)
     if not json_file.exists():
         print(f"❌ JSON注册文件不存在: {json_file}")
         return False
@@ -56,7 +57,7 @@ def register_from_json(mcp_client_url: str, vm_id: str, session_id: str) -> bool
         return False
 
 
-def _register_servers_with_vm_session(mcp_client_url: str, vm_id: str, session_id: str) -> bool:
+def _register_servers_with_vm_session(mcp_client_url: str, vm_id: str, session_id: str, json_path: str=None) -> bool:
     """
     Register MCP servers from JSON file with specified vm_id and session_id
     
@@ -68,7 +69,7 @@ def _register_servers_with_vm_session(mcp_client_url: str, vm_id: str, session_i
     Returns:
         bool: True if registration successful
     """
-    return register_from_json(mcp_client_url, vm_id, session_id)
+    return register_from_json(mcp_client_url, vm_id, session_id, json_path)
 
 
 
@@ -471,6 +472,10 @@ if __name__ == "__main__":
     session_id = "sess456"
     instruction_text = "创建一个c++的hello world cpp程序。"
     mcp_server_name = "filesystem"
+    # json_path = os.path.join(MCP_BASE_DIR, f"{vm_id}_{session_id}/.useit/mcp_server_frp.json")
+    # json 为空，那么会自动去MCP_BASE_DIR目录下查找
+    json_path = "/home/ubuntu/workspace/gxw/useit_mcp_new/useit_mcp_test_dir/.useit/mcp_server_frp.json"
+    
     
     print("🚀 MCP系统完整功能测试")
     print(f"🎯 目标客户端: {vm_id}/{session_id}")
@@ -485,7 +490,7 @@ if __name__ == "__main__":
     
     # 1. 注册服务器
     print("\n📝 步骤1: 注册MCP服务器")
-    registration_success = _register_servers_with_vm_session(mcp_client_url, vm_id, session_id)
+    registration_success = _register_servers_with_vm_session(mcp_client_url, vm_id, session_id, json_path)
     
     if not registration_success:
         print("❌ 服务器注册失败，无法继续测试")

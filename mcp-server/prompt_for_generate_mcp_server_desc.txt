@@ -1,0 +1,56 @@
+  You are tasked with analyzing an MCP server implementation and generating a JSON description file named `mcp_server_desc.json`. This file helps AI systems understand
+   the server's capabilities for task planning purposes.
+
+  ## Analysis Requirements
+
+  1. **Read the server implementation**: Examine the main server file (usually `server.py`) and any related documentation
+  2. **Identify all MCP tools**: Look for functions decorated with `@mcp.tool()`
+  3. **Understand tool functionality**: Analyze what each tool does, its parameters, and return values
+
+  ## Output Format
+
+  Generate a JSON file with exactly two keys:
+
+  ```json
+  {
+    "simple_desc": "Brief one-line summary of the server's primary capabilities",
+    "complete_desc": "Detailed description of all available tools and their functions"
+  }
+
+  Content Guidelines
+
+  simple_desc
+
+  - Single sentence (50-80 words)
+  - Highlight the main purpose and key features
+  - Use descriptive keywords that capture the essence
+
+  complete_desc
+
+  - Focus ONLY on tool functionality
+  - Describe what each tool can do in practical terms
+  - Use action-oriented language ("You can...", "Use X to...", "Handle Y with...")
+  - Mention key parameters and capabilities
+  - Keep it concise but comprehensive
+  - Avoid implementation details, architecture descriptions, or technical internals
+  - Target audience: AI systems doing task planning
+
+  Example Structure for complete_desc
+
+  "This [server type] provides tools for [main purpose]. You can [tool1 function] using tool1. [Tool2 function] with tool2, supporting [key features]. [Tool3 function]
+   using tool3 with [parameters/options]. [Continue for all tools]. All operations [mention any important constraints or sandbox info]."
+
+  What NOT to include in complete_desc
+
+  - Technical implementation details
+  - Architecture descriptions
+  - Security mechanisms (unless they affect tool usage)
+  - Configuration details
+  - Framework information
+  - Performance characteristics
+  - Error handling specifics
+
+  Focus purely on "what can this server help me accomplish" from a task planning perspective.
+
+  Finally， create a mcp_server_desc.json in the mcp server folder。
+  ```

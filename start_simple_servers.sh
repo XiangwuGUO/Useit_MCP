@@ -53,7 +53,7 @@ show_help() {
     echo "  $0 status                   # 查看状态"
     echo ""
     echo "注意:"
-    echo "  - FRP模式会生成 mcp_server_frp.json 配置文件"
+    echo "  - FRP模式会在 base_dir/.useit/ 目录下生成 mcp_server_frp.json 配置文件"
     echo "  - 此文件包含服务器连接信息，可用于MCP客户端注册"
 }
 
@@ -86,7 +86,12 @@ get_status() {
             python3 simple_launcher.py --status 2>/dev/null || echo "  无法获取详细状态"
             
             # 检查FRP配置文件是否存在
-            local frp_json="$PROJECT_DIR/mcp_server_frp.json"
+            local frp_json
+            if [ -n "$base_dir" ]; then
+                frp_json="$base_dir/.useit/mcp_server_frp.json"
+            else
+                frp_json="$PROJECT_DIR/mcp_workspace/.useit/mcp_server_frp.json"
+            fi
             if [ -f "$frp_json" ]; then
                 echo -e "${GREEN}📄 FRP配置文件: $frp_json${NC}"
                 echo -e "${BLUE}📋 服务器数量: $(python3 -c "import json; print(len(json.load(open('$frp_json'))['servers']))" 2>/dev/null || echo "未知")${NC}"
@@ -187,7 +192,12 @@ start_servers() {
             
             # 等待frp配置文件生成并输出路径
             sleep 2
-            local frp_json="$PROJECT_DIR/mcp_server_frp.json"
+            local frp_json
+            if [ -n "$base_dir" ]; then
+                frp_json="$base_dir/.useit/mcp_server_frp.json"
+            else
+                frp_json="$PROJECT_DIR/mcp_workspace/.useit/mcp_server_frp.json"
+            fi
             if [ -f "$frp_json" ]; then
                 echo -e "${GREEN}📄 FRP服务器配置文件已生成: $frp_json${NC}"
                 echo -e "${BLUE}📋 可使用此文件配置注册到MCP客户端${NC}"
@@ -246,11 +256,20 @@ stop_servers() {
     fi
     
     # 额外清理：删除可能残留的FRP配置文件
-    local frp_json="$PROJECT_DIR/mcp_server_frp.json"
+    # 检查默认工作空间和其他可能的位置
+    local frp_json="$PROJECT_DIR/mcp_workspace/.useit/mcp_server_frp.json"
     if [ -f "$frp_json" ]; then
         echo -e "${BLUE}🧹 清理FRP配置文件...${NC}"
         rm -f "$frp_json"
         echo -e "${GREEN}✅ FRP配置文件已清理${NC}"
+    fi
+    
+    # 也清理旧的位置，防止遗留文件
+    local old_frp_json="$PROJECT_DIR/mcp_server_frp.json"
+    if [ -f "$old_frp_json" ]; then
+        echo -e "${BLUE}🧹 清理旧的FRP配置文件...${NC}"
+        rm -f "$old_frp_json"
+        echo -e "${GREEN}✅ 旧的FRP配置文件已清理${NC}"
     fi
 }
 
