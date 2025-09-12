@@ -1,37 +1,43 @@
 #!/usr/bin/env python3
 """
-简化的MCP Gateway Server
-移除FRP服务发现功能，专注于核心MCP客户机管理
+MCP Gateway Server with LangChain Integration
+
+简化版MCP网关服务器，使用LangChain处理智能任务执行
 """
 
 import asyncio
 import logging
-import time
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import List, Optional
+from typing import Optional
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+import json
 
 # 导入核心模块
 from core.api_models import *
 from core.client_manager import ClientManager
-from core.task_executor import execute_intelligent_task, execute_smart_tool_call
+from core.langchain_executor import LangChainMCPExecutor
+from core.streaming_executor import StreamingLangChainExecutor
+from core.stream_models import *
 from config.settings import settings, validate_required_settings
 from utils.helpers import format_duration, timing_decorator
 
 # 配置日志
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper()),
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    filename=settings.log_file
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
-# 全局客户机管理器
+# 全局管理器
 client_manager = ClientManager()
+langchain_executor: Optional[LangChainMCPExecutor] = None
+streaming_executor: Optional[StreamingLangChainExecutor] = None
 
 # 服务器启动时间
 server_start_time = datetime.now()
@@ -40,9 +46,22 @@ server_start_time = datetime.now()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
+    global langchain_executor, streaming_executor
+    
     # 启动时
-    logger.info("🚀 MCP Gateway Server 启动 (简化版)")
+    logger.info("🚀 MCP Gateway Server 启动 (LangChain版)")
     validate_required_settings()
+    
+    # 初始化LangChain执行器
+    anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
+    if anthropic_api_key:
+        langchain_executor = LangChainMCPExecutor(client_manager, anthropic_api_key)
+        streaming_executor = StreamingLangChainExecutor(client_manager, anthropic_api_key)
+        logger.info("✅ LangChain MCP Executor 已初始化")
+        logger.info("✅ Streaming LangChain MCP Executor 已初始化")
+    else:
+        logger.warning("⚠️ 未设置ANTHROPIC_API_KEY，智能任务执行功能将不可用")
+    
     logger.info("✅ 客户机管理器已就绪")
     
     yield
@@ -50,13 +69,17 @@ async def lifespan(app: FastAPI):
     # 关闭时
     logger.info("🛑 MCP Gateway Server 关闭")
     await client_manager.cleanup()
+    if langchain_executor:
+        await langchain_executor.cleanup()
+    if streaming_executor:
+        await streaming_executor.cleanup()
 
 
 # 创建 FastAPI 应用
 app = FastAPI(
     title="MCP Gateway Server",
-    description="统一的MCP客户机网关服务器 (简化版)",
-    version="1.0.0",
+    description="基于LangChain的MCP客户机网关服务器",
+    version="2.0.0",
     lifespan=lifespan
 )
 
@@ -79,19 +102,21 @@ async def root():
     """根路径 - 系统信息"""
     return APIResponse(
         success=True,
-        message="MCP Gateway Server (简化版) 正在运行",
+        message="MCP Gateway Server (LangChain版) 正在运行",
         data={
             "service": "MCP Gateway Server",
-            "version": "1.0.0",
-            "mode": "simplified",
+            "version": "2.0.0",
+            "mode": "langchain",
             "uptime": format_duration(int((datetime.now() - server_start_time).total_seconds())),
+            "langchain_enabled": langchain_executor is not None,
             "endpoints": {
                 "health": "/health",
                 "stats": "/stats", 
                 "docs": "/docs",
                 "clients": "/clients",
                 "tools": "/tools",
-                "smart_tool_call": "/tools/smart-call"
+                "tasks": "/tasks/execute",
+                "stream_tasks": "/tasks/execute-stream"
             }
         }
     )
@@ -113,6 +138,7 @@ async def health_check():
                 "total_servers": stats["total_servers"],
                 "connected_servers": stats["connected_servers"],
                 "total_tools": stats["total_tools"],
+                "langchain_ready": langchain_executor is not None,
                 "uptime": format_duration(int((datetime.now() - server_start_time).total_seconds()))
             }
         )
@@ -143,12 +169,9 @@ async def get_stats():
                 "uptime": uptime_str,
                 "uptime_seconds": uptime_seconds,
                 "server_start_time": server_start_time.isoformat(),
-                "mode": "simplified",
-                "settings": {
-                    "claude_model": settings.claude_model,
-                    "client_timeout": settings.client_timeout,
-                    "task_timeout": settings.task_timeout
-                }
+                "mode": "langchain",
+                "langchain_executor_ready": langchain_executor is not None,
+                "anthropic_api_configured": bool(os.getenv("ANTHROPIC_API_KEY"))
             }
         )
     except Exception as e:
@@ -253,26 +276,6 @@ async def remove_client(vm_id: str, session_id: str):
         raise HTTPException(status_code=500, detail=f"移除客户机失败: {e}")
 
 
-@app.delete("/clients/{vm_id}/{session_id}/servers/{server_name}", response_model=APIResponse)
-async def remove_server(vm_id: str, session_id: str, server_name: str):
-    """从客户机中移除指定服务器"""
-    try:
-        success = await client_manager.remove_server_from_client(vm_id, session_id, server_name)
-        
-        if success:
-            return APIResponse(
-                success=True,
-                message="服务器移除成功",
-                data={"vm_id": vm_id, "session_id": session_id, "server_name": server_name}
-            )
-        else:
-            raise HTTPException(status_code=404, detail="客户机或服务器不存在")
-            
-    except Exception as e:
-        logger.error(f"移除服务器失败: {e}")
-        raise HTTPException(status_code=500, detail=f"移除服务器失败: {e}")
-
-
 # ============================================================================
 # 工具和资源管理
 # ============================================================================
@@ -367,50 +370,69 @@ async def find_and_call_tool(tool_call: ToolFindCall):
         raise HTTPException(status_code=500, detail=f"工具查找调用失败: {e}")
 
 
-@app.post("/tools/smart-call", response_model=APIResponse)
+@app.post("/filesystem/list-all-paths", response_model=APIResponse)
 @timing_decorator
-async def smart_call_tool(smart_call: SmartToolCall):
-    """智能工具调用 - 使用AI根据描述生成参数并执行工具"""
+async def list_all_paths(tool_call: ToolCall):
+    """直接调用filesystem服务器的list_all_paths工具，返回所有文件和文件夹的绝对路径列表
+    
+    请求体格式:
+    {
+        "vm_id": "your_vm_id",
+        "session_id": "your_session_id",
+        "tool_name": "list_all_paths",
+        "arguments": {},
+        "server_name": "filesystem"  // 可选，指定具体服务器
+    }
+    """
     try:
-        logger.info(f"🧠 智能调用服务器: {smart_call.mcp_server_name} - {smart_call.task_description[:50]}...")
+        logger.info(f"🗂️ 获取文件系统所有路径: {tool_call.vm_id}/{tool_call.session_id}")
         
-        result = await execute_smart_tool_call(
-            client_manager,
-            smart_call.mcp_server_name,
-            smart_call.task_description,
-            smart_call.vm_id,
-            smart_call.session_id
+        # 确保调用的是list_all_paths工具
+        if tool_call.tool_name != "list_all_paths":
+            raise ValueError(f"此接口只支持list_all_paths工具，但收到: {tool_call.tool_name}")
+        
+        # 直接调用list_all_paths工具
+        result = await client_manager.call_tool(
+            tool_call.vm_id,
+            tool_call.session_id, 
+            tool_call.tool_name,
+            tool_call.arguments or {},  # 确保参数不为None
+            tool_call.server_name
         )
         
         return APIResponse(
-            success=result.success,
-            message=f"智能工具调用{'成功' if result.success else '失败'}",
-            data=result.dict()
+            success=True,
+            message="获取路径列表成功",
+            data={
+                "vm_id": tool_call.vm_id,
+                "session_id": tool_call.session_id,
+                "server_name": tool_call.server_name,
+                "paths": result
+            }
         )
     except Exception as e:
-        logger.error(f"智能工具调用失败: {e}")
-        raise HTTPException(status_code=500, detail=f"智能工具调用失败: {e}")
+        logger.error(f"获取路径列表失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取路径列表失败: {e}")
 
 
 # ============================================================================
-# 智能任务执行
+# LangChain智能任务执行
 # ============================================================================
 
 @app.post("/tasks/execute", response_model=APIResponse)
 @timing_decorator
 async def execute_task(task: TaskRequest):
-    """执行智能任务"""
-    try:
-        logger.info(f"🧠 执行智能任务: {task.task_description[:100]}...")
-        
-        result = await execute_intelligent_task(
-            client_manager,
-            task.vm_id,
-            task.session_id, 
-            task.mcp_server_name,
-            task.task_description,
-            task.context
+    """执行智能任务 (使用LangChain)"""
+    if not langchain_executor:
+        raise HTTPException(
+            status_code=503, 
+            detail="LangChain执行器未初始化，请检查ANTHROPIC_API_KEY配置"
         )
+    
+    try:
+        logger.info(f"🧠 执行LangChain智能任务: {task.task_description[:100]}...")
+        
+        result = await langchain_executor.execute_task(task)
         
         return APIResponse(
             success=True,
@@ -420,7 +442,8 @@ async def execute_task(task: TaskRequest):
                 "vm_id": task.vm_id,
                 "session_id": task.session_id,
                 "mcp_server_name": task.mcp_server_name,
-                "result": result
+                "result": result.dict(),
+                "new_files": result.new_files
             }
         )
     except Exception as e:
@@ -428,15 +451,175 @@ async def execute_task(task: TaskRequest):
         raise HTTPException(status_code=500, detail=f"智能任务执行失败: {e}")
 
 
+@app.post("/tools/smart-call", response_model=APIResponse)
+@timing_decorator
+async def smart_call_tool(smart_call: SmartToolCall):
+    """智能工具调用 (简化版，使用单步LangChain调用)"""
+    if not langchain_executor:
+        raise HTTPException(
+            status_code=503,
+            detail="LangChain执行器未初始化，请检查ANTHROPIC_API_KEY配置"
+        )
+    
+    try:
+        logger.info(f"🧠 智能调用: {smart_call.mcp_server_name} - {smart_call.task_description[:50]}...")
+        
+        # 转换为TaskRequest
+        task_request = TaskRequest(
+            vm_id=smart_call.vm_id,
+            session_id=smart_call.session_id,
+            mcp_server_name=smart_call.mcp_server_name,
+            task_description=smart_call.task_description
+        )
+        
+        result = await langchain_executor.execute_task(task_request)
+        
+        # 转换为SmartToolResult格式
+        smart_result = SmartToolResult(
+            success=result.success,
+            mcp_server_name=smart_call.mcp_server_name,
+            selected_tool_name=result.execution_steps[0]["tool_name"] if result.execution_steps else None,
+            vm_id=smart_call.vm_id,
+            session_id=smart_call.session_id,
+            task_description=smart_call.task_description,
+            result=result.final_result,
+            completion_summary=result.summary,
+            execution_time_seconds=result.execution_time_seconds,
+            error_message=result.error_message,
+            new_files=result.new_files
+        )
+        
+        return APIResponse(
+            success=result.success,
+            message=f"智能工具调用{'成功' if result.success else '失败'}",
+            data=smart_result.dict()
+        )
+    except Exception as e:
+        logger.error(f"智能工具调用失败: {e}")
+        raise HTTPException(status_code=500, detail=f"智能工具调用失败: {e}")
+
+
 # ============================================================================
-# 服务器注册 (用于简化的FRP注册)
+# 流式任务执行 (SSE)
+# ============================================================================
+
+@app.post("/tasks/execute-stream")
+@timing_decorator
+async def execute_task_streaming(task: TaskRequest):
+    """流式执行智能任务 (SSE)"""
+    if not streaming_executor:
+        raise HTTPException(
+            status_code=503, 
+            detail="流式执行器未初始化，请检查ANTHROPIC_API_KEY配置"
+        )
+    
+    async def generate_sse_stream():
+        """生成SSE流"""
+        try:
+            logger.info(f"🌊 开始流式执行任务: {task.task_description[:100]}...")
+            print(f"🔥🔥🔥 [SERVER] 即将调用 streaming_executor.execute_task_streaming")
+            print(f"🔥🔥🔥 [SERVER] streaming_executor类型: {type(streaming_executor)}")
+            
+            async for event in streaming_executor.execute_task_streaming(task):
+                # 转换为SSE消息
+                sse_message = SSEMessage(
+                    id=event.timestamp,
+                    event=event.type,
+                    data=json.dumps(event.dict(), ensure_ascii=False)
+                )
+                
+                yield sse_message.to_sse_string()
+                
+                # 确保缓冲区刷新
+                await asyncio.sleep(0.01)
+                
+        except Exception as e:
+            logger.error(f"流式任务执行异常: {e}")
+            
+            # 发送错误事件
+            error_event = StreamEvent(
+                type="error",
+                data={
+                    "error_message": str(e),
+                    "error_type": type(e).__name__
+                }
+            )
+            
+            sse_message = SSEMessage(
+                event="error",
+                data=json.dumps(error_event.dict(), ensure_ascii=False)
+            )
+            
+            yield sse_message.to_sse_string()
+    
+    return StreamingResponse(
+        generate_sse_stream(), 
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "Cache-Control"
+        }
+    )
+
+
+@app.get("/tasks/active", response_model=APIResponse)
+async def get_active_tasks():
+    """获取活跃任务状态"""
+    if not streaming_executor:
+        return APIResponse(
+            success=False,
+            message="流式执行器未初始化",
+            data={}
+        )
+    
+    active_tasks = streaming_executor.get_active_tasks()
+    
+    return APIResponse(
+        success=True,
+        message=f"获取到 {len(active_tasks)} 个活跃任务",
+        data={
+            "active_tasks": [task.dict() for task in active_tasks.values()],
+            "task_count": len(active_tasks)
+        }
+    )
+
+
+@app.get("/tasks/{task_id}/status", response_model=APIResponse)
+async def get_task_status(task_id: str):
+    """获取指定任务状态"""
+    if not streaming_executor:
+        raise HTTPException(
+            status_code=503,
+            detail="流式执行器未初始化"
+        )
+    
+    active_tasks = streaming_executor.get_active_tasks()
+    
+    if task_id not in active_tasks:
+        raise HTTPException(
+            status_code=404,
+            detail=f"任务 {task_id} 不存在"
+        )
+    
+    task_status = active_tasks[task_id]
+    
+    return APIResponse(
+        success=True,
+        message="任务状态获取成功",
+        data=task_status.dict()
+    )
+
+
+# ============================================================================
+# 服务器注册 (兼容性接口)
 # ============================================================================
 
 @app.post("/servers/register", response_model=APIResponse)
 async def register_server(server_info: ServerRegistrationInfo):
-    """注册MCP服务器 (用于FRP注册)"""
+    """注册MCP服务器 (兼容性接口)"""
     try:
-        # 提取服务器信息
         name = server_info.name
         url = server_info.url
         description = server_info.description
@@ -444,7 +627,7 @@ async def register_server(server_info: ServerRegistrationInfo):
         if not name or not url:
             raise ValueError("name 和 url 是必需的")
         
-        # 使用服务器名称作为vm_id和session_id（兼容旧行为）
+        # 使用服务器名称作为vm_id和session_id
         await client_manager.add_server_to_client(name, "auto", name, url, description)
         
         logger.info(f"✅ 服务器注册成功: {name} -> {url}")
@@ -470,10 +653,11 @@ async def register_server(server_info: ServerRegistrationInfo):
 
 def main():
     """启动服务器"""
-    print("🚀 启动 MCP Gateway Server (简化版)")
+    print("🚀 启动 MCP Gateway Server (LangChain版)")
     print(f"📍 地址: http://localhost:{settings.port}")
     print(f"📚 文档: http://localhost:{settings.port}/docs")
     print(f"🏥 健康检查: http://localhost:{settings.port}/health")
+    print(f"🧠 LangChain集成: {'启用' if os.getenv('ANTHROPIC_API_KEY') else '需要配置ANTHROPIC_API_KEY'}")
     print("=" * 60)
     
     uvicorn.run(

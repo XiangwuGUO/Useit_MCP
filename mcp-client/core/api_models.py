@@ -1,7 +1,7 @@
 """
-API数据模型定义
+简化的API数据模型定义
 
-统一管理所有FastAPI接口的数据模型
+专注于核心MCP功能，使用LangChain处理AI逻辑
 """
 
 from typing import Any, Dict, List, Optional
@@ -59,14 +59,6 @@ class ToolFindCall(BaseModel):
     preferred_vm_id: Optional[str] = Field(None, description="优先使用的虚拟机ID")
 
 
-class SmartToolCall(BaseModel):
-    """智能工具调用请求"""
-    mcp_server_name: str = Field(..., description="MCP服务器名称 (如: filesystem, audio_slicer)")
-    task_description: str = Field(..., description="要执行的任务描述")
-    vm_id: str = Field(..., description="虚拟机ID")
-    session_id: str = Field(..., description="会话ID")
-
-
 class ToolInfo(BaseModel):
     """工具信息"""
     name: str
@@ -106,20 +98,19 @@ class ServerRegistrationInfo(BaseModel):
     description: str = Field("", description="服务器描述")
 
 
-# === 智能任务模型 ===
+# === LangChain任务模型 ===
 
 class TaskRequest(BaseModel):
-    """智能任务请求"""
+    """智能任务请求 (由LangChain处理)"""
     vm_id: str = Field(..., description="虚拟机ID")
     session_id: str = Field(..., description="会话ID") 
     mcp_server_name: str = Field(..., description="MCP服务器名称")
     task_description: str = Field(..., description="任务描述")
-    max_steps: int = Field(10, description="最大执行步骤数")
-    context: Optional[Dict[str, Any]] = Field(None, description="任务上下文")
+    context: Optional[str] = Field(None, description="任务上下文")
 
 
 class TaskResult(BaseModel):
-    """智能任务结果"""
+    """任务执行结果"""
     success: bool
     task_id: str
     vm_id: str
@@ -131,7 +122,17 @@ class TaskResult(BaseModel):
     summary: str
     execution_time_seconds: float
     error_message: Optional[str] = None
-    token_usage: Optional[Dict[str, int]] = None
+    new_files: Optional[Dict[str, str]] = None  # 新生成文件：{相对路径: 描述}
+
+
+# === 简化的智能工具调用 ===
+
+class SmartToolCall(BaseModel):
+    """智能工具调用请求 (单步调用)"""
+    mcp_server_name: str = Field(..., description="MCP服务器名称")
+    task_description: str = Field(..., description="要执行的任务描述")
+    vm_id: str = Field(..., description="虚拟机ID")
+    session_id: str = Field(..., description="会话ID")
 
 
 class SmartToolResult(BaseModel):
@@ -145,25 +146,5 @@ class SmartToolResult(BaseModel):
     result: Any
     completion_summary: str
     execution_time_seconds: float
-    token_usage: Optional[Dict[str, int]] = None
     error_message: Optional[str] = None
-
-
-# === 系统状态模型 ===
-
-class HealthStatus(BaseModel):
-    """健康检查状态"""
-    status: str  # healthy, degraded, unhealthy
-    total_clients: int
-    connected_clients: int
-    disconnected_clients: int
-    uptime_seconds: float
-
-
-class SystemMetrics(BaseModel):
-    """系统指标"""
-    active_sessions: int
-    total_tools: int
-    total_resources: int
-    tasks_executed: int
-    average_response_time_ms: float
+    new_files: Optional[Dict[str, str]] = None

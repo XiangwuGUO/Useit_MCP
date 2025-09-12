@@ -1,0 +1,383 @@
+#!/usr/bin/env python3
+"""
+流式LangChain执行器
+支持SSE实时事件推送的任务执行器
+"""
+
+import asyncio
+import json
+import logging
+from typing import Dict, List, Any, Optional, AsyncGenerator
+from datetime import datetime
+from uuid import uuid4
+
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_mcp_adapters.tools import load_mcp_tools
+from langgraph.prebuilt import create_react_agent
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_anthropic import ChatAnthropic
+from langchain_core.tools import BaseTool
+from langchain_core.callbacks import CallbackManager
+
+from .api_models import TaskResult, TaskRequest
+from .client_manager import ClientManager
+from .stream_models import *
+from .langchain_executor import LangChainMCPExecutor
+from .streaming_callbacks import StreamingToolCallbackHandler
+from .message_parser import AgentMessageParser
+from .streaming_agent import StreamingAgent
+
+logger = logging.getLogger(__name__)
+
+
+# StreamingToolWrapper 已被 StreamingToolCallbackHandler 替代
+
+
+class StreamingLangChainExecutor(LangChainMCPExecutor):
+    """流式LangChain执行器"""
+    
+    def __init__(self, client_manager: ClientManager, anthropic_api_key: Optional[str] = None):
+        super().__init__(client_manager, anthropic_api_key)
+        self.active_tasks: Dict[str, StreamTaskStatus] = {}
+    
+    async def execute_task_streaming(self, task_request: TaskRequest) -> AsyncGenerator[StreamEvent, None]:
+        """
+        流式执行任务，生成SSE事件
+        
+        Args:
+            task_request: 任务请求对象
+            
+        Yields:
+            StreamEvent: 任务执行过程中的各种事件
+        """
+        
+        print(f"🚨🚨🚨 [EXECUTOR] execute_task_streaming 被调用！")
+        print(f"🚨🚨🚨 [EXECUTOR] 任务描述: {task_request.task_description}")
+        
+        # 生成任务ID
+        task_id = f"task_{uuid4().hex[:8]}"
+        
+        # 创建事件队列
+        event_queue = asyncio.Queue()
+        
+        # 创建任务状态
+        task_status = StreamTaskStatus(
+            task_id=task_id,
+            vm_id=task_request.vm_id,
+            session_id=task_request.session_id,
+            mcp_server_name=task_request.mcp_server_name,
+            task_description=task_request.task_description,
+            status="pending",
+            start_time=datetime.now()
+        )
+        
+        self.active_tasks[task_id] = task_status
+        
+        try:
+            # 发送任务开始事件
+            await self._send_task_start_event(event_queue, task_request, task_id)
+            
+            # 异步执行任务
+            task = asyncio.create_task(
+                self._execute_task_with_events(task_request, task_id, event_queue)
+            )
+            
+            # 流式生成事件
+            async for event in self._stream_events(event_queue, task):
+                yield event
+                
+        except Exception as e:
+            logger.error(f"流式任务执行失败: {e}")
+            
+            # 发送错误事件
+            error_event = TaskErrorEvent(
+                task_id=task_id,
+                error_message=str(e),
+                error_type=type(e).__name__
+            )
+            
+            yield StreamEvent(type="error", data=error_event.dict())
+        
+        finally:
+            # 清理任务状态
+            if task_id in self.active_tasks:
+                del self.active_tasks[task_id]
+    
+    async def _execute_task_with_events(self, task_request: TaskRequest, task_id: str, event_queue: asyncio.Queue):
+        """执行任务并发送事件"""
+        
+        try:
+            logger.info(f"开始执行流式任务 {task_id}")
+            
+            # 更新任务状态
+            self.active_tasks[task_id].status = "running"
+            
+            # 1. 获取或创建流式Agent
+            logger.info(f"创建流式Agent for {task_request.vm_id}/{task_request.session_id}")
+            print(f"🎯🎯🎯 [DEBUG] 使用新的流式Agent代码！任务ID: {task_id}")
+            print(f"🎯🎯🎯 [DEBUG] 即将调用 _get_streaming_agent_v2")
+            
+            streaming_agent = await self._get_streaming_agent_v2(
+                task_request.vm_id, 
+                task_request.session_id
+            )
+            
+            # 2. 构建任务消息
+            messages = self._build_task_messages(task_request)
+            logger.info(f"构建了 {len(messages)} 个消息")
+            
+            # 3. 执行任务（流式，实时发送工具事件）
+            start_time = asyncio.get_event_loop().time()
+            logger.info(f"开始执行流式Agent任务")
+            
+            result = await streaming_agent.astream_invoke(
+                messages=messages,
+                event_queue=event_queue,
+                task_id=task_id,
+                max_iterations=10
+            )
+            end_time = asyncio.get_event_loop().time()
+            
+            logger.info(f"流式Agent任务执行完成，耗时 {end_time - start_time:.2f}秒")
+            logger.info(f"总共执行了 {result.get('total_steps', 0)} 个工具步骤")
+            
+            # 4. 处理结果并发送完成事件
+            task_result = await self._process_streaming_result(
+                result, 
+                task_request, 
+                task_id,
+                end_time - start_time
+            )
+            
+            logger.info(f"处理任务结果完成，成功: {task_result.success}")
+            
+            # 发送任务完成事件
+            await self._send_task_complete_event(event_queue, task_result, task_id)
+            
+            logger.info(f"任务完成事件已发送")
+            
+        except Exception as e:
+            logger.error(f"任务执行失败: {e}", exc_info=True)
+            
+            # 发送错误事件
+            error_event = TaskErrorEvent(
+                task_id=task_id,
+                error_message=str(e),
+                error_type=type(e).__name__
+            )
+            
+            await event_queue.put(StreamEvent(type="error", data=error_event.dict()))
+            logger.info(f"错误事件已发送")
+    
+    async def _get_streaming_agent(self, vm_id: str, session_id: str, task_id: str, event_queue: asyncio.Queue):
+        """获取带流式事件的Agent（使用回调机制）"""
+        
+        # 1. 构建MCP服务器配置
+        mcp_config = await self._build_mcp_config(vm_id, session_id)
+        
+        # 2. 创建MCP客户端
+        mcp_client = MultiServerMCPClient(mcp_config)
+        
+        # 3. 获取原始工具
+        tools = await mcp_client.get_tools()
+        
+        # 4. 创建流式回调处理器
+        callback_handler = StreamingToolCallbackHandler(event_queue, task_id)
+        
+        # 5. 创建回调管理器
+        callback_manager = CallbackManager([callback_handler])
+        
+        # 6. 创建带回调的模型
+        model = ChatAnthropic(
+            model="claude-sonnet-4-20250514",
+            api_key=self.anthropic_api_key,
+            temperature=0,
+            callbacks=[callback_handler]  # 添加回调处理器
+        )
+        
+        # 7. 创建系统提示
+        system_prompt = self._build_system_prompt(tools)
+        
+        # 8. 创建Agent，配置回调
+        agent = create_react_agent(
+            model=model,
+            tools=tools,
+            prompt=system_prompt
+        )
+        
+        # 9. 配置Agent参数和回调
+        agent = agent.with_config({
+            "recursion_limit": 10,
+            "max_execution_time": 120,
+            "callbacks": [callback_handler],  # Agent级别的回调
+            "configurable": {
+                "thread_id": f"stream_thread_{task_id}",
+            }
+        })
+        
+        logger.info(f"为任务 {task_id} 创建了流式Agent，包含 {len(tools)} 个工具和回调处理器")
+        
+        return agent, callback_handler
+    
+    async def _get_simple_agent(self, vm_id: str, session_id: str):
+        """获取简单的Agent（不使用回调机制）"""
+        
+        # 1. 构建MCP服务器配置
+        mcp_config = await self._build_mcp_config(vm_id, session_id)
+        
+        # 2. 创建MCP客户端
+        mcp_client = MultiServerMCPClient(mcp_config)
+        
+        # 3. 获取工具
+        tools = await mcp_client.get_tools()
+        
+        # 4. 创建模型
+        model = ChatAnthropic(
+            model="claude-sonnet-4-20250514",
+            api_key=self.anthropic_api_key,
+            temperature=0
+        )
+        
+        # 5. 创建系统提示
+        system_prompt = self._build_system_prompt(tools)
+        
+        # 6. 创建Agent
+        agent = create_react_agent(
+            model=model,
+            tools=tools,
+            prompt=system_prompt
+        )
+        
+        logger.info(f"创建了简单Agent，包含 {len(tools)} 个工具")
+        
+        return agent
+    
+    async def _get_streaming_agent_v2(self, vm_id: str, session_id: str) -> StreamingAgent:
+        """获取流式Agent（v2版本，使用自定义流式执行）"""
+        
+        # 1. 构建MCP服务器配置
+        mcp_config = await self._build_mcp_config(vm_id, session_id)
+        
+        # 2. 创建MCP客户端
+        mcp_client = MultiServerMCPClient(mcp_config)
+        
+        # 3. 获取工具
+        tools = await mcp_client.get_tools()
+        
+        # 4. 创建模型
+        model = ChatAnthropic(
+            model="claude-sonnet-4-20250514",
+            api_key=self.anthropic_api_key,
+            temperature=0
+        )
+        
+        # 5. 创建系统提示
+        system_prompt_obj = self._build_system_prompt(tools)
+        system_prompt_text = system_prompt_obj.content
+        
+        # 6. 创建流式Agent
+        streaming_agent = StreamingAgent(
+            model=model,
+            tools=tools,
+            system_prompt=system_prompt_text
+        )
+        
+        logger.info(f"创建了流式Agent，包含 {len(tools)} 个工具")
+        
+        return streaming_agent
+    
+    async def _stream_events(self, event_queue: asyncio.Queue, task: asyncio.Task) -> AsyncGenerator[StreamEvent, None]:
+        """流式生成事件"""
+        
+        while not task.done():
+            try:
+                # 等待事件，超时时间短以保持响应性
+                event = await asyncio.wait_for(event_queue.get(), timeout=0.1)
+                yield event
+            except asyncio.TimeoutError:
+                # 超时继续循环
+                continue
+        
+        # 等待任务完成
+        try:
+            await task
+        except Exception as e:
+            logger.error(f"任务执行异常: {e}")
+        
+        # 任务完成后，处理队列中剩余的事件
+        remaining_events = 0
+        while not event_queue.empty():
+            try:
+                event = event_queue.get_nowait()
+                yield event
+                remaining_events += 1
+            except asyncio.QueueEmpty:
+                break
+        
+        # 短暂等待确保所有事件都被处理
+        await asyncio.sleep(0.1)
+        
+        # 再次检查是否有新事件
+        while not event_queue.empty():
+            try:
+                event = event_queue.get_nowait()
+                yield event
+                remaining_events += 1
+            except asyncio.QueueEmpty:
+                break
+        
+        logger.info(f"流式事件处理完成，处理了 {remaining_events} 个剩余事件")
+    
+    async def _send_task_start_event(self, event_queue: asyncio.Queue, task_request: TaskRequest, task_id: str):
+        """发送任务开始事件"""
+        event_data = TaskStartEvent(
+            task_id=task_id,
+            vm_id=task_request.vm_id,
+            session_id=task_request.session_id,
+            mcp_server_name=task_request.mcp_server_name,
+            task_description=task_request.task_description,
+            context=getattr(task_request, 'context', None)
+        )
+        
+        stream_event = StreamEvent(
+            type="start",
+            data=event_data.dict()
+        )
+        
+        await event_queue.put(stream_event)
+    
+    async def _send_task_complete_event(self, event_queue: asyncio.Queue, task_result: TaskResult, task_id: str):
+        """发送任务完成事件"""
+        event_data = TaskCompleteEvent(
+            task_id=task_id,
+            success=task_result.success,
+            final_result=task_result.final_result,
+            summary=task_result.summary,
+            execution_time=task_result.execution_time_seconds,
+            total_steps=len(task_result.execution_steps),
+            successful_steps=sum(1 for step in task_result.execution_steps if step.get("status") == "success"),
+            new_files=task_result.new_files
+        )
+        
+        stream_event = StreamEvent(
+            type="complete",
+            data=event_data.dict()
+        )
+        
+        await event_queue.put(stream_event)
+    
+    async def _process_streaming_result(self, result: Dict, task_request: TaskRequest, 
+                                      task_id: str, execution_time: float) -> TaskResult:
+        """处理流式结果，复用父类逻辑"""
+        
+        # 复用父类的结果处理逻辑
+        task_result = await self._process_result(result, task_request, execution_time)
+        
+        # 更新任务ID
+        task_result.task_id = task_id
+        
+        return task_result
+    
+    def get_active_tasks(self) -> Dict[str, StreamTaskStatus]:
+        """获取活跃任务状态"""
+        return self.active_tasks.copy()

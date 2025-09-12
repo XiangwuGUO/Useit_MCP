@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCP流式任务执行演示</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        
+        .container {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        
+        .form-group {
+            margin-bottom: 15px;
+        }
+        
+        label {
+            display: block;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        
+        input, textarea, select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        
+        button {
+            background: #007bff;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        
+        button:hover {
+            background: #0056b3;
+        }
+        
+        button:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+        }
+        
+        .event-log {
+            background: #000;
+            color: #00ff00;
+            padding: 15px;
+            height: 400px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            border-radius: 4px;
+            white-space: pre-wrap;
+        }
+        
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        
+        .status.connected {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .status.disconnected {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .status.running {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeeba;
+        }
+        
+        .progress {
+            margin: 10px 0;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background: #e9ecef;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: #28a745;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+        
+        .event-types {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px;
+            margin: 15px 0;
+        }
+        
+        .event-type {
+            background: white;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            text-align: center;
+        }
+        
+        .event-type.active {
+            background: #007bff;
+            color: white;
+            border-color: #0056b3;
+        }
+    </style>
+</head>
+<body>
+    <h1>🌊 MCP流式任务执行演示</h1>
+    
+    <div class="container">
+        <h2>任务配置</h2>
+        <form id="taskForm">
+            <div class="form-group">
+                <label for="serverUrl">MCP客户端URL:</label>
+                <input type="text" id="serverUrl" value="http://localhost:8080">
+            </div>
+            
+            <div class="form-group">
+                <label for="vmId">VM ID:</label>
+                <input type="text" id="vmId" value="demo_vm">
+            </div>
+            
+            <div class="form-group">
+                <label for="sessionId">Session ID:</label>
+                <input type="text" id="sessionId" value="demo_session">
+            </div>
+            
+            <div class="form-group">
+                <label for="mcpServerName">MCP服务器名称:</label>
+                <select id="mcpServerName">
+                    <option value="filesystem">filesystem</option>
+                    <option value="audio_slicer">audio_slicer</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="taskDescription">任务描述:</label>
+                <textarea id="taskDescription" rows="3">列出当前目录的文件并显示详细信息</textarea>
+            </div>
+            
+            <div class="form-group">
+                <label for="context">任务上下文 (可选):</label>
+                <input type="text" id="context" placeholder="演示流式调用功能">
+            </div>
+            
+            <button type="submit" id="startBtn">🚀 开始流式执行</button>
+            <button type="button" id="stopBtn" disabled>⏹️ 停止连接</button>
+            <button type="button" id="clearBtn">🗑️ 清空日志</button>
+        </form>
+    </div>
+    
+    <div class="container">
+        <h2>连接状态</h2>
+        <div id="status" class="status disconnected">未连接</div>
+        
+        <div class="progress">
+            <div class="progress-bar">
+                <div id="progressFill" class="progress-fill"></div>
+            </div>
+            <div id="progressText">等待开始...</div>
+        </div>
+        
+        <div class="event-types">
+            <div class="event-type" id="event-start">开始事件 (0)</div>
+            <div class="event-type" id="event-tool_start">工具开始 (0)</div>
+            <div class="event-type" id="event-tool_result">工具结果 (0)</div>
+            <div class="event-type" id="event-progress">进度更新 (0)</div>
+            <div class="event-type" id="event-complete">完成事件 (0)</div>
+            <div class="event-type" id="event-error">错误事件 (0)</div>
+        </div>
+    </div>
+    
+    <div class="container">
+        <h2>实时日志</h2>
+        <div id="eventLog" class="event-log">等待任务执行...\n</div>
+    </div>
+
+    <script>
+        let eventSource = null;
+        let eventCounts = {
+            'start': 0,
+            'tool_start': 0,
+            'tool_result': 0,
+            'progress': 0,
+            'complete': 0,
+            'error': 0
+        };
+
+        const elements = {
+            form: document.getElementById('taskForm'),
+            startBtn: document.getElementById('startBtn'),
+            stopBtn: document.getElementById('stopBtn'),
+            clearBtn: document.getElementById('clearBtn'),
+            status: document.getElementById('status'),
+            eventLog: document.getElementById('eventLog'),
+            progressFill: document.getElementById('progressFill'),
+            progressText: document.getElementById('progressText')
+        };
+
+        // 表单提交处理
+        elements.form.addEventListener('submit', function(e) {
+            e.preventDefault();
+            startStreamingTask();
+        });
+
+        // 停止按钮处理
+        elements.stopBtn.addEventListener('click', function() {
+            stopStreaming();
+        });
+
+        // 清空日志按钮处理
+        elements.clearBtn.addEventListener('click', function() {
+            elements.eventLog.textContent = '';
+            resetEventCounts();
+        });
+
+        function startStreamingTask() {
+            // 获取表单数据
+            const formData = {
+                vm_id: document.getElementById('vmId').value,
+                session_id: document.getElementById('sessionId').value,
+                mcp_server_name: document.getElementById('mcpServerName').value,
+                task_description: document.getElementById('taskDescription').value,
+                context: document.getElementById('context').value || undefined
+            };
+
+            const serverUrl = document.getElementById('serverUrl').value;
+
+            // 首先发送POST请求启动任务
+            fetch(`${serverUrl}/tasks/execute-stream`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'text/event-stream'
+                },
+                body: JSON.stringify(formData)
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                // 创建EventSource连接到流式响应
+                const reader = response.body.getReader();
+                startSSEConnection(reader);
+            })
+            .catch(error => {
+                logEvent('❌ 启动任务失败: ' + error.message);
+                updateStatus('disconnected', '连接失败: ' + error.message);
+            });
+        }
+
+        function startSSEConnection(reader) {
+            updateStatus('connected', '已连接 - 任务执行中...');
+            elements.startBtn.disabled = true;
+            elements.stopBtn.disabled = false;
+
+            function readStream() {
+                reader.read().then(({ done, value }) => {
+                    if (done) {
+                        stopStreaming();
+                        return;
+                    }
+
+                    // 解析SSE数据
+                    const chunk = new TextDecoder().decode(value);
+                    const lines = chunk.split('\n');
+                    
+                    let currentEvent = {};
+                    
+                    for (const line of lines) {
+                        if (line.startsWith('event:')) {
+                            currentEvent.event = line.substring(6).trim();
+                        } else if (line.startsWith('data:')) {
+                            currentEvent.data = line.substring(5).trim();
+                        } else if (line.trim() === '' && currentEvent.data) {
+                            // 处理完整的事件
+                            handleSSEEvent(currentEvent);
+                            currentEvent = {};
+                        }
+                    }
+
+                    // 继续读取
+                    readStream();
+                }).catch(error => {
+                    logEvent('❌ 读取流数据失败: ' + error.message);
+                    stopStreaming();
+                });
+            }
+
+            readStream();
+        }
+
+        function handleSSEEvent(event) {
+            try {
+                const eventData = JSON.parse(event.data);
+                const eventType = eventData.type;
+                const data = eventData.data;
+
+                // 更新事件计数
+                if (eventCounts.hasOwnProperty(eventType)) {
+                    eventCounts[eventType]++;
+                    updateEventCount(eventType, eventCounts[eventType]);
+                }
+
+                // 处理不同类型的事件
+                switch (eventType) {
+                    case 'start':
+                        handleStartEvent(data);
+                        break;
+                    case 'tool_start':
+                        handleToolStartEvent(data);
+                        break;
+                    case 'tool_result':
+                        handleToolResultEvent(data);
+                        break;
+                    case 'progress':
+                        handleProgressEvent(data);
+                        break;
+                    case 'complete':
+                        handleCompleteEvent(data);
+                        break;
+                    case 'error':
+                        handleErrorEvent(data);
+                        break;
+                }
+            } catch (error) {
+                logEvent('⚠️ 解析事件数据失败: ' + error.message);
+            }
+        }
+
+        function handleStartEvent(data) {
+            const taskId = data.task_id;
+            const taskDesc = data.task_description;
+            logEvent(`🚀 任务开始: ${taskDesc.substring(0, 50)}...`);
+            logEvent(`📍 任务ID: ${taskId}`);
+        }
+
+        function handleToolStartEvent(data) {
+            const stepNumber = data.step_number;
+            const toolName = data.tool_name;
+            const serverName = data.server_name;
+            
+            logEvent(`🔧 步骤 ${stepNumber}: 开始执行工具`);
+            logEvent(`   🛠️  工具: ${toolName}`);
+            logEvent(`   📡 服务器: ${serverName}`);
+            
+            if (data.reasoning) {
+                logEvent(`   💭 推理: ${data.reasoning}`);
+            }
+        }
+
+        function handleToolResultEvent(data) {
+            const stepNumber = data.step_number;
+            const toolName = data.tool_name;
+            const status = data.status;
+            const executionTime = data.execution_time;
+            
+            const statusEmoji = status === 'success' ? '✅' : '❌';
+            logEvent(`${statusEmoji} 步骤 ${stepNumber}: 工具执行完成`);
+            logEvent(`   🛠️  工具: ${toolName}`);
+            logEvent(`   ⏱️  时间: ${executionTime.toFixed(2)}秒`);
+            
+            if (data.result) {
+                const resultPreview = JSON.stringify(data.result).substring(0, 100);
+                logEvent(`   📄 结果: ${resultPreview}...`);
+            }
+        }
+
+        function handleProgressEvent(data) {
+            const currentStep = data.current_step;
+            const totalSteps = data.total_steps;
+            const percentage = data.completion_percentage;
+            
+            updateProgress(percentage);
+            logEvent(`📊 进度: ${currentStep}/${totalSteps} (${percentage}%)`);
+        }
+
+        function handleCompleteEvent(data) {
+            const success = data.success;
+            const executionTime = data.execution_time;
+            const totalSteps = data.total_steps;
+            const successfulSteps = data.successful_steps;
+            
+            logEvent(`🎯 任务完成!`);
+            logEvent(`   ✅ 状态: ${success ? '成功' : '失败'}`);
+            logEvent(`   ⏱️  总时间: ${executionTime.toFixed(2)}秒`);
+            logEvent(`   📊 统计: ${successfulSteps}/${totalSteps} 步骤成功`);
+            
+            if (data.new_files && Object.keys(data.new_files).length > 0) {
+                logEvent(`   📁 生成文件:`);
+                for (const [path, desc] of Object.entries(data.new_files)) {
+                    logEvent(`      📄 ${path}: ${desc}`);
+                }
+            }
+            
+            updateProgress(100);
+            updateStatus('disconnected', '任务完成');
+            stopStreaming();
+        }
+
+        function handleErrorEvent(data) {
+            const errorMessage = data.error_message;
+            const errorType = data.error_type;
+            
+            logEvent(`❌ 执行错误:`);
+            logEvent(`   🚨 类型: ${errorType}`);
+            logEvent(`   📝 信息: ${errorMessage}`);
+            
+            updateStatus('disconnected', '执行失败: ' + errorMessage);
+            stopStreaming();
+        }
+
+        function stopStreaming() {
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+            }
+            
+            elements.startBtn.disabled = false;
+            elements.stopBtn.disabled = true;
+            
+            if (elements.status.textContent.includes('执行中')) {
+                updateStatus('disconnected', '连接已停止');
+            }
+        }
+
+        function logEvent(message) {
+            const timestamp = new Date().toLocaleTimeString();
+            elements.eventLog.textContent += `[${timestamp}] ${message}\n`;
+            elements.eventLog.scrollTop = elements.eventLog.scrollHeight;
+        }
+
+        function updateStatus(type, message) {
+            elements.status.className = `status ${type}`;
+            elements.status.textContent = message;
+        }
+
+        function updateProgress(percentage) {
+            elements.progressFill.style.width = percentage + '%';
+            elements.progressText.textContent = `进度: ${percentage}%`;
+        }
+
+        function updateEventCount(eventType, count) {
+            const element = document.getElementById(`event-${eventType}`);
+            if (element) {
+                const text = element.textContent.replace(/\(\d+\)$/, `(${count})`);
+                element.textContent = text;
+                
+                // 临时高亮
+                element.classList.add('active');
+                setTimeout(() => element.classList.remove('active'), 500);
+            }
+        }
+
+        function resetEventCounts() {
+            for (const eventType in eventCounts) {
+                eventCounts[eventType] = 0;
+                updateEventCount(eventType, 0);
+            }
+            updateProgress(0);
+        }
+    </script>
+</body>
+</html>

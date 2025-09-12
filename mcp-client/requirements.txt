@@ -24,3 +24,9 @@ pytest-asyncio>=0.21.0
 
 # 日志 (可选)
 structlog>=23.0.0
+
+# LangChain集成
+langchain-mcp-adapters
+langgraph
+langchain-anthropic
+langchain-core

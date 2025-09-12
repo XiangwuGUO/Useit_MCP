@@ -37,10 +37,13 @@ from typing import Any, Literal, Dict, List, Tuple
 from pydantic import BaseModel, Field
 
 from mcp.server.fastmcp import FastMCP
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from base_server import StandardMCPServer, ServerConfigs
 
 
 # -----------------------------------------------------------------------------
-# 配置与沙箱
+# 配置与沙箱  
 # -----------------------------------------------------------------------------
 
 def load_resource_config() -> dict:
@@ -270,32 +273,100 @@ def to_file_info(p: Path, sandbox_root: Path = None) -> FileInfo:
 # 服务器与工具
 # -----------------------------------------------------------------------------
 
-mcp = FastMCP("FileSystem", port=8003)
-
-
-@mcp.tool()
+# 使用原有架构，直接创建FastMCP实例
+mcp = FastMCP(
+    "filesystem",
+    title="文件系统服务", 
+    description="提供文件系统操作功能，包括文件读写、目录管理等",
+    port=8003
+)
 def get_base(session_id: str = None) -> str:
     """获取沙箱根目录。"""
     return str(BASE_DIR)
 
 
 @mcp.tool()
+def list_all_paths(session_id: str = None) -> List[str]:
+    """获取base_dir下所有文件和文件夹的绝对路径列表。
+    
+    返回base_dir及其子目录下所有文件和文件夹的绝对路径。
+    路径格式会根据操作系统自动调整（Windows/Linux）。
+    """
+    try:
+        paths = []
+        root = BASE_DIR
+        
+        # 添加根目录本身
+        paths.append(str(root))
+        
+        # 遍历所有子项（文件和文件夹）
+        for path in root.rglob("*"):
+            # 忽略.useit文件夹及其内容
+            if ".useit" not in path.parts:
+                paths.append(str(path))
+        
+        # 排序：目录在前，文件在后，同类型按名称排序
+        def sort_key(p):
+            path_obj = Path(p)
+            return (not path_obj.is_dir(), p.lower())
+        
+        paths.sort(key=sort_key)
+        return paths
+    
+    except Exception as e:
+        raise RuntimeError(f"列出路径失败: {e}")
+
+
+@mcp.tool()
 def list_dir(req: ListDirRequest) -> ListDirResult:
-    """列目录（支持递归与模式）。"""
-    root = resolve_in_sandbox(req.path, req.session_id)
+    """列目录（支持递归与模式）。
+    
+    默认行为：如果路径为"."或空，则列出BASE_DIR下所有文件和文件夹，
+    包括子目录，但忽略.useit文件夹，最多返回300个条目。
+    """
+    # 如果请求路径为"."或空，使用BASE_DIR并启用递归搜索
+    if req.path in (".", "", "/"):
+        root = BASE_DIR
+        use_recursive = True
+        max_items = 300
+    else:
+        root = resolve_in_sandbox(req.path, req.session_id)
+        use_recursive = req.recursive
+        max_items = None
+    
     if not root.exists():
         raise FileNotFoundError(f"Not found: {root}")
     if not root.is_dir():
         raise NotADirectoryError(f"Not a directory: {root}")
 
     def iter_paths() -> list[Path]:
+        paths = []
+        count = 0
+        
         if req.pattern:
-            if req.recursive:
-                return list(root.rglob(req.pattern))
-            return list(root.glob(req.pattern))
-        if req.recursive:
-            return [p for p in root.rglob("*")]
-        return [p for p in root.glob("*")]
+            if use_recursive:
+                pattern_paths = root.rglob(req.pattern)
+            else:
+                pattern_paths = root.glob(req.pattern)
+        else:
+            if use_recursive:
+                pattern_paths = root.rglob("*")
+            else:
+                pattern_paths = root.glob("*")
+        
+        for p in pattern_paths:
+            # 忽略.useit文件夹及其内容
+            if ".useit" in p.parts:
+                continue
+                
+            paths.append(p)
+            count += 1
+            
+            # 如果设置了最大数量限制，则停止收集
+            if max_items and count >= max_items:
+                break
+        
+        return paths
 
     paths = iter_paths()
     if req.files_only:
@@ -303,6 +374,10 @@ def list_dir(req: ListDirRequest) -> ListDirResult:
 
     # 使用BASE_DIR作为sandbox_root
     entries = [to_file_info(p, BASE_DIR) for p in paths]
+    
+    # 按类型和名称排序：先目录后文件，同类型按名称排序
+    entries.sort(key=lambda x: (not x.is_dir, x.name.lower()))
+    
     return ListDirResult(base_dir=str(BASE_DIR), entries=entries)
 
 
@@ -328,13 +403,31 @@ def read_text(req: ReadTextRequest) -> str:
 def write_text(req: WriteTextRequest) -> dict[str, str]:
     """写入文本文件（可 append）。"""
     p = resolve_in_sandbox(req.path, req.session_id)
+    base_path = BASE_DIR
     p.parent.mkdir(parents=True, exist_ok=True)
+    
+    is_new_file = not p.exists()
     if req.append and p.exists():
         with p.open("a", encoding=req.encoding) as f:
             f.write(req.content)
     else:
         p.write_text(req.content, encoding=req.encoding)
-    return {"status": "ok", "path": str(p)}
+    
+    # 构建相对路径
+    try:
+        relative_path = p.relative_to(base_path)
+    except ValueError:
+        relative_path = p
+    
+    result = {"status": "ok", "path": str(p)}
+    
+    # 如果是新文件或写入操作，添加文件信息
+    if is_new_file or not req.append:
+        result["new_files"] = {
+            str(relative_path): "文本文件" if is_new_file else "更新的文本文件"
+        }
+    
+    return result
 
 
 @mcp.tool()
@@ -353,20 +446,61 @@ def read_binary(req: ReadBinaryRequest) -> ReadBinaryResult:
 def write_binary(req: WriteBinaryRequest) -> dict[str, str]:
     """写入二进制文件（输入 base64）。"""
     p = resolve_in_sandbox(req.path, req.session_id)
+    base_path = BASE_DIR
+    
+    is_new_file = not p.exists()
     if p.exists() and not req.overwrite:
         raise FileExistsError(f"Exists: {p}")
+    
     p.parent.mkdir(parents=True, exist_ok=True)
     data = base64.b64decode(req.base64)
     p.write_bytes(data)
-    return {"status": "ok", "path": str(p), "size": str(len(data))}
+    
+    # 构建相对路径
+    try:
+        relative_path = p.relative_to(base_path)
+    except ValueError:
+        relative_path = p
+    
+    # 判断文件类型
+    file_ext = p.suffix.lower()
+    file_type_map = {
+        '.jpg': 'JPEG图片', '.jpeg': 'JPEG图片', '.png': 'PNG图片', 
+        '.gif': 'GIF图片', '.pdf': 'PDF文档', '.zip': '压缩文件',
+        '.wav': '音频文件', '.mp3': 'MP3音频'
+    }
+    file_description = file_type_map.get(file_ext, '二进制文件')
+    
+    result = {"status": "ok", "path": str(p), "size": str(len(data))}
+    result["new_files"] = {
+        str(relative_path): file_description + ("" if is_new_file else " (已更新)")
+    }
+    
+    return result
 
 
 @mcp.tool()
 def mkdir(req: MkdirRequest) -> dict[str, str]:
     """创建目录。"""
     p = resolve_in_sandbox(req.path, req.session_id)
+    is_new_dir = not p.exists()
     p.mkdir(parents=req.parents, exist_ok=req.exist_ok)
-    return {"status": "ok", "path": str(p)}
+    
+    # 构建相对路径
+    try:
+        relative_path = p.relative_to(BASE_DIR)
+    except ValueError:
+        relative_path = p
+    
+    result = {"status": "ok", "path": str(p)}
+    
+    # 如果创建了新目录，添加到new_files中
+    if is_new_dir:
+        result["new_files"] = {
+            str(relative_path): "目录"
+        }
+    
+    return result
 
 
 @mcp.tool()
@@ -376,6 +510,11 @@ def move(req: MoveCopyRequest) -> dict[str, str]:
     dst = resolve_in_sandbox(req.dst, req.session_id)
     if not src.exists():
         raise FileNotFoundError(f"Not found: {src}")
+    
+    # 检查目标是否已存在
+    dst_existed = dst.exists()
+    is_src_dir = src.is_dir()
+    
     dst.parent.mkdir(parents=True, exist_ok=True)
     if dst.exists():
         if req.overwrite:
@@ -385,8 +524,24 @@ def move(req: MoveCopyRequest) -> dict[str, str]:
                 dst.unlink()
         else:
             raise FileExistsError(f"Exists: {dst}")
+    
     shutil.move(str(src), str(dst))
-    return {"status": "ok", "src": str(src), "dst": str(dst)}
+    
+    # 构建相对路径
+    try:
+        relative_dst = dst.relative_to(BASE_DIR)
+    except ValueError:
+        relative_dst = dst
+    
+    result = {"status": "ok", "src": str(src), "dst": str(dst)}
+    
+    # 移动操作在目标位置创建了新文件/目录
+    if not dst_existed or req.overwrite:
+        result["new_files"] = {
+            str(relative_dst): "目录" if is_src_dir else "文件"
+        }
+    
+    return result
 
 
 @mcp.tool()
@@ -396,16 +551,36 @@ def copy(req: MoveCopyRequest) -> dict[str, str]:
     dst = resolve_in_sandbox(req.dst, req.session_id)
     if not src.exists():
         raise FileNotFoundError(f"Not found: {src}")
+    
+    # 检查目标是否已存在以及源的类型
+    dst_existed = dst.exists()
+    is_src_dir = src.is_dir()
+    
     dst.parent.mkdir(parents=True, exist_ok=True)
     if dst.exists() and not req.overwrite:
         raise FileExistsError(f"Exists: {dst}")
+    
     if src.is_dir():
         if dst.exists():
             shutil.rmtree(dst)
         shutil.copytree(src, dst)
     else:
         shutil.copy2(src, dst)
-    return {"status": "ok", "src": str(src), "dst": str(dst)}
+    
+    # 构建相对路径
+    try:
+        relative_dst = dst.relative_to(BASE_DIR)
+    except ValueError:
+        relative_dst = dst
+    
+    result = {"status": "ok", "src": str(src), "dst": str(dst)}
+    
+    # 复制操作总是在目标位置创建新文件/目录
+    result["new_files"] = {
+        str(relative_dst): "目录" if is_src_dir else "文件"
+    }
+    
+    return result
 
 
 @mcp.tool()
@@ -413,7 +588,7 @@ def delete(req: DeleteRequest) -> dict[str, str]:
     """删除文件/目录。"""
     p = resolve_in_sandbox(req.path, req.session_id)
     if not p.exists():
-        return {"status": "ok", "path": str(p), "message": "not found"}
+        return {"status": "ok", "path": str(p), "message": "not found", "new_files": {}}
     if p.is_dir():
         if req.recursive:
             shutil.rmtree(p)
@@ -421,7 +596,7 @@ def delete(req: DeleteRequest) -> dict[str, str]:
             p.rmdir()
     else:
         p.unlink()
-    return {"status": "ok", "path": str(p)}
+    return {"status": "ok", "path": str(p), "new_files": {}}
 
 
 # ----------------------------- Office 文本提取 -------------------------------
@@ -495,7 +670,7 @@ def read_office_text(req: OfficeReadRequest) -> dict[str, str]:
         text = _read_pptx_text(p)
     else:
         raise ValueError("仅支持 .pdf/.docx/.pptx")
-    return {"path": str(p), "text": text}
+    return {"path": str(p), "text": text, "new_files": {}}
 
 
 # -----------------------------------------------------------------------------
@@ -882,11 +1057,12 @@ def sync_files_to_target(req: SyncRequest) -> SyncResult:
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    # 保持兼容性，使用原有启动方式
     import sys
     import os
     sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
     from server_base import start_mcp_server
     
-    start_mcp_server(mcp, 8003, "FileSystem")
+    start_mcp_server(mcp, 8003, "filesystem")
 
 
