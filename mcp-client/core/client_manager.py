@@ -378,8 +378,11 @@ class ClientManager:
         return [client.get_status() for client in self.clients.values()]
     
     async def get_all_tools(self) -> List[Dict[str, Any]]:
-        """获取所有客户机的工具列表"""
+        """获取所有客户机的工具列表 - 过滤掉专用于直接调用的工具"""
         all_tools = []
+        
+        # 专用于直接调用的工具，不应该暴露给AI
+        direct_call_only_tools = {"list_all_paths"}
         
         for client in self.clients.values():
             if not client.is_any_server_connected():
@@ -388,6 +391,11 @@ class ClientManager:
             try:
                 tools = await client.get_all_tools()
                 for tool in tools:
+                    # 过滤掉专用于直接调用的工具
+                    if tool.name in direct_call_only_tools:
+                        logger.debug(f"过滤直接调用专用工具: {tool.name}")
+                        continue
+                        
                     all_tools.append({
                         "client_id": client.client_id,
                         "vm_id": client.vm_id,
@@ -445,7 +453,13 @@ class ClientManager:
     
     async def find_tool_and_call(self, tool_name: str, arguments: Dict[str, Any], 
                                 preferred_vm_id: Optional[str] = None) -> Any:
-        """查找工具并调用"""
+        """查找工具并调用 - 禁止AI调用专用于直接调用的工具"""
+        # 专用于直接调用的工具，不允许AI调用
+        direct_call_only_tools = {"list_all_paths"}
+        
+        if tool_name in direct_call_only_tools:
+            raise RuntimeError(f"工具 '{tool_name}' 仅用于直接调用，不允许AI调用")
+        
         # 查找有该工具的客户机
         candidates = []
         

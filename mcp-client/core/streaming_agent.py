@@ -30,7 +30,12 @@ class StreamingAgent:
         self.tools = {tool.name: tool for tool in tools}
         self.system_prompt = system_prompt
         
+        # Token 使用跟踪
+        self.total_token_usage = {"claude-sonnet-4-20250514": 0}
+        self.step_token_usage = {}  # 每个步骤的token使用
+        
         print(f"🤖 [AGENT] 流式Agent创建完成，包含 {len(tools)} 个工具")
+        print(f"🤖 [AGENT] 工具名称列表: {list(self.tools.keys())}")
         print(f"🤖 [AGENT] 模型已绑定工具，支持工具调用")
     
     async def astream_invoke(
@@ -58,10 +63,60 @@ class StreamingAgent:
                 
                 print(f"📝 [AGENT] 模型响应类型: {type(response).__name__}")
                 
+                # 2. 跟踪token使用（如果响应包含usage信息）
+                if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                    usage = response.usage_metadata
+                    input_tokens = usage.get('input_tokens', 0)
+                    output_tokens = usage.get('output_tokens', 0)
+                    total_tokens = input_tokens + output_tokens
+                    
+                    # 记录当前步骤的token使用
+                    self.step_token_usage[step_counter] = {
+                        "model_name": "claude-sonnet-4-20250514",
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                        "total_tokens": total_tokens
+                    }
+                    
+                    # 累加到总计
+                    self.total_token_usage["claude-sonnet-4-20250514"] += total_tokens
+                    
+                    print(f"🔢 [AGENT] Token使用: input={input_tokens}, output={output_tokens}, total={total_tokens}")
+                elif hasattr(response, 'response_metadata') and response.response_metadata:
+                    # 尝试从response_metadata获取usage信息
+                    usage = response.response_metadata.get('usage', {})
+                    if usage:
+                        input_tokens = usage.get('input_tokens', 0)
+                        output_tokens = usage.get('output_tokens', 0)
+                        total_tokens = input_tokens + output_tokens
+                        
+                        self.step_token_usage[step_counter] = {
+                            "model_name": "claude-sonnet-4-20250514", 
+                            "input_tokens": input_tokens,
+                            "output_tokens": output_tokens,
+                            "total_tokens": total_tokens
+                        }
+                        
+                        self.total_token_usage["claude-sonnet-4-20250514"] += total_tokens
+                        
+                        print(f"🔢 [AGENT] Token使用 (metadata): input={input_tokens}, output={output_tokens}, total={total_tokens}")
+                else:
+                    print(f"⚠️ [AGENT] 无法获取token使用信息")
+                
                 # 2. 检查是否有工具调用
                 tool_calls = getattr(response, 'tool_calls', [])
+                print(f"🔍 [AGENT] 响应对象类型: {type(response).__name__}")
+                print(f"🔍 [AGENT] 响应对象属性: {dir(response)}")
+                print(f"🔍 [AGENT] tool_calls 属性: {tool_calls}")
+                print(f"🔍 [AGENT] tool_calls 类型: {type(tool_calls)}")
+                
                 if not tool_calls:
                     print(f"✅ [AGENT] 没有工具调用，对话结束")
+                    # 尝试其他方式获取工具调用
+                    if hasattr(response, 'additional_kwargs'):
+                        print(f"🔍 [AGENT] additional_kwargs: {response.additional_kwargs}")
+                    if hasattr(response, 'content'):
+                        print(f"🔍 [AGENT] content: {response.content}")
                     break
                 
                 print(f"🔧 [AGENT] 发现 {len(tool_calls)} 个工具调用")
@@ -104,7 +159,9 @@ class StreamingAgent:
         return {
             "messages": conversation,
             "iterations": iteration + 1,
-            "total_steps": step_counter
+            "total_steps": step_counter,
+            "total_token_usage": self.total_token_usage.copy(),
+            "step_token_usage": self.step_token_usage.copy()
         }
     
     async def _send_tool_start_event(
@@ -198,6 +255,12 @@ class StreamingAgent:
         
         server_name = self._extract_server_name(tool_name)
         
+        # 获取当前步骤的token使用情况
+        current_step_token = self.step_token_usage.get(step_number, {})
+        token_usage_summary = {
+            "total_tokens": current_step_token.get("total_tokens", 0)
+        } if current_step_token else {"total_tokens": 0}
+        
         tool_result_event = ToolResultEvent(
             task_id=task_id,
             step_number=step_number,
@@ -205,7 +268,8 @@ class StreamingAgent:
             server_name=server_name,
             result=result,
             status="success" if success else "error",
-            execution_time=execution_time
+            execution_time=execution_time,
+            token_usage=token_usage_summary
         )
         
         stream_event = StreamEvent(
@@ -239,8 +303,18 @@ class StreamingAgent:
             arguments = {}
         
         print(f"🔧 [AGENT] 执行工具: {tool_name} 参数: {arguments}")
+        print(f"🔧 [AGENT] 可用工具: {list(self.tools.keys())}")
         
-        if not tool_name or tool_name not in self.tools:
+        if not tool_name:
+            print(f"❌ [AGENT] 工具名称为空!")
+            return {
+                'success': False,
+                'result': '工具名称为空',
+                'execution_time': 0
+            }
+        
+        if tool_name not in self.tools:
+            print(f"❌ [AGENT] 工具 {tool_name} 不在可用工具列表中!")
             return {
                 'success': False,
                 'result': f'工具 {tool_name} 不存在',
@@ -252,23 +326,47 @@ class StreamingAgent:
             start_time = time.time()
             tool = self.tools[tool_name]
             
+            print(f"🔧 [AGENT] 工具对象类型: {type(tool).__name__}")
+            print(f"🔧 [AGENT] 工具对象方法: {[m for m in dir(tool) if not m.startswith('_')]}")
+            
             # 尝试不同的工具调用方法
             try:
+                print(f"🔧 [AGENT] 尝试调用工具，参数: {arguments}")
+                
+                # 🚨 修复参数格式问题 🚨
+                # MCP工具期望包装格式，而不是扁平化参数
+                fixed_arguments = arguments
+                if isinstance(arguments, dict) and 'req' not in arguments:
+                    # 如果参数没有被包装在 req 中，需要包装它
+                    fixed_arguments = {"req": arguments}
+                    print(f"🔧 [AGENT] 修正参数格式: {arguments} -> {fixed_arguments}")
+                else:
+                    print(f"🔧 [AGENT] 参数格式已正确: {arguments}")
+                
                 # 尝试直接调用工具（推荐方式）
                 if hasattr(tool, 'invoke'):
-                    result = await tool.ainvoke(arguments) if asyncio.iscoroutinefunction(tool.ainvoke) else tool.invoke(arguments)
+                    print(f"🔧 [AGENT] 使用 invoke 方法")
+                    result = await tool.ainvoke(fixed_arguments) if asyncio.iscoroutinefunction(tool.ainvoke) else tool.invoke(fixed_arguments)
                 elif hasattr(tool, '_run'):
+                    print(f"🔧 [AGENT] 使用 _run 方法")
                     # 尝试_run方法，带config参数
                     if asyncio.iscoroutinefunction(tool._run):
-                        result = await tool._run(config={}, **arguments)
+                        result = await tool._run(config={}, **fixed_arguments)
                     else:
-                        result = tool._run(config={}, **arguments)
+                        result = tool._run(config={}, **fixed_arguments)
                 else:
+                    print(f"🔧 [AGENT] 使用直接调用")
                     # 最后的备选方案
-                    result = await tool(arguments) if asyncio.iscoroutinefunction(tool) else tool(arguments)
+                    result = await tool(fixed_arguments) if asyncio.iscoroutinefunction(tool) else tool(fixed_arguments)
+                    
+                print(f"🔧 [AGENT] 工具调用成功，结果类型: {type(result)}")
+                print(f"🔧 [AGENT] 工具调用结果: {str(result)[:200]}...")
+                
             except TypeError as te:
+                print(f"🔧 [AGENT] TypeError: {te}")
                 # 如果config参数不需要，尝试不带config
                 if "config" in str(te):
+                    print(f"🔧 [AGENT] 重试不带config参数")
                     if asyncio.iscoroutinefunction(tool._run):
                         result = await tool._run(**arguments)
                     else:
@@ -311,3 +409,11 @@ class StreamingAgent:
             return "audio_slicer"
         
         return "unknown"
+    
+    def get_total_token_usage(self) -> Dict[str, int]:
+        """获取总token使用情况"""
+        return self.total_token_usage.copy()
+    
+    def get_step_token_usage(self, step_number: int) -> Optional[Dict[str, Any]]:
+        """获取指定步骤的token使用情况"""
+        return self.step_token_usage.get(step_number)

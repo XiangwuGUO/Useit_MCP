@@ -151,8 +151,13 @@ class StreamingLangChainExecutor(LangChainMCPExecutor):
             
             logger.info(f"处理任务结果完成，成功: {task_result.success}")
             
+            # 获取总token使用量
+            total_token_usage = result.get('total_token_usage', {})
+            if total_token_usage:
+                logger.info(f"总token使用量: {total_token_usage}")
+            
             # 发送任务完成事件
-            await self._send_task_complete_event(event_queue, task_result, task_id)
+            await self._send_task_complete_event(event_queue, task_result, task_id, total_token_usage)
             
             logger.info(f"任务完成事件已发送")
             
@@ -346,7 +351,7 @@ class StreamingLangChainExecutor(LangChainMCPExecutor):
         
         await event_queue.put(stream_event)
     
-    async def _send_task_complete_event(self, event_queue: asyncio.Queue, task_result: TaskResult, task_id: str):
+    async def _send_task_complete_event(self, event_queue: asyncio.Queue, task_result: TaskResult, task_id: str, total_token_usage: Optional[Dict[str, int]] = None):
         """发送任务完成事件"""
         event_data = TaskCompleteEvent(
             task_id=task_id,
@@ -356,7 +361,8 @@ class StreamingLangChainExecutor(LangChainMCPExecutor):
             execution_time=task_result.execution_time_seconds,
             total_steps=len(task_result.execution_steps),
             successful_steps=sum(1 for step in task_result.execution_steps if step.get("status") == "success"),
-            new_files=task_result.new_files
+            new_files=task_result.new_files,
+            total_token_usage=total_token_usage
         )
         
         stream_event = StreamEvent(
@@ -377,6 +383,49 @@ class StreamingLangChainExecutor(LangChainMCPExecutor):
         task_result.task_id = task_id
         
         return task_result
+    
+    def _extract_final_result(self, message) -> str:
+        """从消息中提取最终结果，处理不同的内容格式"""
+        
+        if not message or not hasattr(message, 'content'):
+            return "任务完成"
+        
+        content = message.content
+        
+        # 如果content是字符串，直接返回
+        if isinstance(content, str):
+            return content
+        
+        # 如果content是列表，提取文本内容
+        if isinstance(content, list):
+            text_parts = []
+            for item in content:
+                if isinstance(item, dict):
+                    # 处理 {'text': '...', 'type': '...'} 格式
+                    if 'text' in item:
+                        text_parts.append(item['text'])
+                    elif 'content' in item:
+                        text_parts.append(str(item['content']))
+                elif isinstance(item, str):
+                    text_parts.append(item)
+                else:
+                    text_parts.append(str(item))
+            
+            if text_parts:
+                return ' '.join(text_parts)
+        
+        # 如果content是字典，尝试提取文本
+        if isinstance(content, dict):
+            if 'text' in content:
+                return content['text']
+            elif 'content' in content:
+                return str(content['content'])
+        
+        # 最后兜底，转换为字符串
+        try:
+            return str(content)
+        except Exception:
+            return "任务完成"
     
     def get_active_tasks(self) -> Dict[str, StreamTaskStatus]:
         """获取活跃任务状态"""

@@ -153,6 +153,7 @@ def _process_sse_stream(response) -> Tuple[bool, Dict[str, Any]]:
                     execution_time = data.get('execution_time', 0)
                     step_number = data.get('step_number', '?')
                     result = data.get('result', '')
+                    token_usage = data.get('token_usage', {})
                     
                     # 服务器名称应由MCP服务器端正确提供，不再进行客户端推断
                     
@@ -161,6 +162,12 @@ def _process_sse_stream(response) -> Tuple[bool, Dict[str, Any]]:
                     print(f"   📡 MCP服务器: {server_name}")
                     print(f"   ⏱️  执行时间: {execution_time:.3f}秒")
                     print(f"   📊 状态: {status}")
+                    
+                    # 显示token使用情况
+                    if token_usage:
+                        model_name = token_usage.get('model_name', 'unknown')
+                        total_tokens = token_usage.get('total_tokens', 0)
+                        print(f"   🔢 Token使用: {model_name} - {total_tokens} tokens")
                     
                     # 显示结果预览（前100个字符）
                     if result:
@@ -173,7 +180,8 @@ def _process_sse_stream(response) -> Tuple[bool, Dict[str, Any]]:
                         "tool_name": tool_name,
                         "status": status,
                         "execution_time": execution_time,
-                        "result": result
+                        "result": result,
+                        "token_usage": token_usage
                     })
                     print()
                 
@@ -183,6 +191,7 @@ def _process_sse_stream(response) -> Tuple[bool, Dict[str, Any]]:
                     summary = data.get('summary', '')
                     total_execution_time = data.get('execution_time', 0)
                     total_steps = data.get('total_steps', 0)
+                    total_token_usage = data.get('total_token_usage', {})
                     
                     print("=" * 50)
                     print(f"🎯 任务完成!")
@@ -191,13 +200,19 @@ def _process_sse_stream(response) -> Tuple[bool, Dict[str, Any]]:
                     print(f"   📊 总步骤数: {total_steps}")
                     print(f"   🔧 实际工具调用数: {len(execution_steps)}")
                     
+                    # 显示总token使用量
+                    if total_token_usage:
+                        for model_name, token_count in total_token_usage.items():
+                            print(f"   🔢 总Token使用: {model_name} - {token_count} tokens")
+                    
                     task_result = {
                         "success": success,
                         "execution_steps": execution_steps,
                         "final_result": final_result,
                         "summary": summary,
                         "execution_time": total_execution_time,
-                        "tool_count": len(execution_steps)
+                        "tool_count": len(execution_steps),
+                        "total_token_usage": total_token_usage
                     }
                     
                     return success, task_result
@@ -229,10 +244,12 @@ def test_filesystem_paths(
     vm_id: str, 
     session_id: str
 ) -> bool:
-    """测试获取文件系统路径列表功能"""
+    """测试获取文件系统路径列表功能 - 专用于直接调用，AI无法访问"""
     
-    print(f"📁 测试获取文件系统所有路径...")
+    print(f"📁 测试获取文件系统所有路径（绕过AI直接调用）...")
     print(f"   📍 会话: {vm_id}/{session_id}")
+    print(f"   🚫 AI无法看到或调用list_all_paths工具")
+    print(f"   🔗 通过MCP服务器HTTP端点调用，复用现有端口")
     
     try:
         # 构建请求
@@ -364,7 +381,7 @@ def main():
     
     # 3. 执行流式任务
     print("3️⃣ 执行流式任务...")
-    task_description = "列出当前目录中的所有文件，并显示每个文件的详细信息"
+    task_description = "查看目录下的simple_pdf文件"
     
     streaming_success, streaming_result = call_streaming_task(
         mcp_client_url=mcp_client_url,
@@ -375,8 +392,9 @@ def main():
     )
     print()
     
-    # 4. 测试路径列表功能
-    print("4️⃣ 测试获取路径列表功能...")
+    # 4. 测试路径列表功能（直接调用，不通过AI）
+    print("4️⃣ 测试获取路径列表功能（直接工具调用）...")
+    print("    📌 注意：此功能专用于直接调用，AI无法访问此工具")
     paths_success = test_filesystem_paths(
         mcp_client_url=mcp_client_url,
         vm_id=vm_id,
@@ -412,8 +430,9 @@ def main():
     if streaming_success and paths_success:
         print(f"\n🎉 所有功能演示成功!")
         print(f"💡 功能完整性验证通过:")
-        print(f"   - 流式任务执行: 支持实时进度监控")
-        print(f"   - 直接工具调用: 支持快速路径查询")
+        print(f"   - 流式任务执行: 支持实时进度监控（AI可用）")
+        print(f"   - 直接工具调用: 支持快速路径查询（AI不可见）")
+        print(f"   - 工具访问控制: list_all_paths专用于直接调用")
     else:
         print(f"\n⚠️ 部分功能需要进一步配置")
 

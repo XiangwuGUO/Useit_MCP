@@ -154,9 +154,14 @@ class LangChainMCPExecutor:
         
         for server_name, server in client.servers.items():
             if server.connected:
+                # 避免重复添加/mcp路径 - server.remote_url已经包含了正确的端点
+                mcp_url = server.remote_url
+                if not mcp_url.endswith("/mcp"):
+                    mcp_url = f"{mcp_url}/mcp"
+                
                 mcp_config[server_name] = {
-                    "transport": "streamable_http",
-                    "url": f"{server.remote_url}/mcp/"
+                    "transport": "streamable_http", 
+                    "url": mcp_url
                 }
         
         if not mcp_config:
@@ -241,7 +246,7 @@ Please complete the user's task using the available tools."""
         
         # 获取最终回复
         final_message = messages[-1] if messages else None
-        final_result = final_message.content if final_message and hasattr(final_message, 'content') else "任务完成"
+        final_result = self._extract_final_result(final_message) if final_message else "任务完成"
         
         # Extract new files from server responses
         new_files = await self._extract_new_files_from_responses(execution_steps)
@@ -317,6 +322,49 @@ Please complete the user's task using the available tools."""
                         new_files[file_path] = file_type
         
         return new_files
+    
+    def _extract_final_result(self, message) -> str:
+        """从消息中提取最终结果，处理不同的内容格式"""
+        
+        if not message or not hasattr(message, 'content'):
+            return "任务完成"
+        
+        content = message.content
+        
+        # 如果content是字符串，直接返回
+        if isinstance(content, str):
+            return content
+        
+        # 如果content是列表，提取文本内容
+        if isinstance(content, list):
+            text_parts = []
+            for item in content:
+                if isinstance(item, dict):
+                    # 处理 {'text': '...', 'type': '...'} 格式
+                    if 'text' in item:
+                        text_parts.append(item['text'])
+                    elif 'content' in item:
+                        text_parts.append(str(item['content']))
+                elif isinstance(item, str):
+                    text_parts.append(item)
+                else:
+                    text_parts.append(str(item))
+            
+            if text_parts:
+                return ' '.join(text_parts)
+        
+        # 如果content是字典，尝试提取文本
+        if isinstance(content, dict):
+            if 'text' in content:
+                return content['text']
+            elif 'content' in content:
+                return str(content['content'])
+        
+        # 最后兜底，转换为字符串
+        try:
+            return str(content)
+        except Exception:
+            return "任务完成"
     
     def _generate_summary(self, execution_steps: List[Dict], final_result: str) -> str:
         """Generate task execution summary"""

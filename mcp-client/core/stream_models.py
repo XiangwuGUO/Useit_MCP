@@ -35,6 +35,7 @@ class ToolStartEvent(BaseModel):
     server_name: str
     arguments: Dict[str, Any]
     reasoning: Optional[str] = None
+    token_usage: Optional[Dict[str, int]] = None
 
 
 class ToolResultEvent(BaseModel):
@@ -47,6 +48,7 @@ class ToolResultEvent(BaseModel):
     status: Literal["success", "error", "timeout"]
     execution_time: float
     error_message: Optional[str] = None
+    token_usage: Optional[Dict[str, int]] = None
 
 
 class ProgressEvent(BaseModel):
@@ -70,6 +72,7 @@ class TaskCompleteEvent(BaseModel):
     successful_steps: int
     new_files: Dict[str, str]
     error_message: Optional[str] = None
+    total_token_usage: Optional[Dict[str, int]] = None
 
 
 class TaskErrorEvent(BaseModel):

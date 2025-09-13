@@ -28,6 +28,8 @@ class StreamingToolCallbackHandler(BaseCallbackHandler):
         self.step_counter = 0
         self.tool_start_times = {}
         self.active_tools = {}  # 跟踪活跃的工具调用
+        self.token_usage = {}   # 跟踪每次调用的token使用
+        self.total_tokens = {"claude-sonnet-4-20250514": 0}  # 总token使用
         
         print(f"🎯 [CALLBACK] 回调处理器已创建，任务ID: {task_id}")
         logger.info(f"StreamingToolCallbackHandler 已创建，任务ID: {task_id}")
@@ -124,6 +126,13 @@ class StreamingToolCallbackHandler(BaseCallbackHandler):
         # 处理输出结果
         result = self._process_tool_output(output)
         
+        # 获取当前运行的token使用情况
+        current_token_usage = self.get_current_run_token_usage(run_id) or {}
+        token_usage_summary = {
+            "model_name": current_token_usage.get("model_name", "claude-sonnet-4-20250514"),
+            "total_tokens": current_token_usage.get("total_tokens", 0)
+        } if current_token_usage else {"model_name": "claude-sonnet-4-20250514", "total_tokens": 0}
+        
         # 创建工具结果事件
         tool_result_event = ToolResultEvent(
             task_id=self.task_id,
@@ -132,7 +141,8 @@ class StreamingToolCallbackHandler(BaseCallbackHandler):
             server_name=server_name,
             result=result,
             status="success",
-            execution_time=execution_time
+            execution_time=execution_time,
+            token_usage=token_usage_summary
         )
         
         # 发送事件到队列
@@ -177,6 +187,13 @@ class StreamingToolCallbackHandler(BaseCallbackHandler):
         # 提取服务器名称
         server_name = self._extract_server_name(tool_name)
         
+        # 获取当前运行的token使用情况
+        current_token_usage = self.get_current_run_token_usage(run_id) or {}
+        token_usage_summary = {
+            "model_name": current_token_usage.get("model_name", "claude-sonnet-4-20250514"),
+            "total_tokens": current_token_usage.get("total_tokens", 0)
+        } if current_token_usage else {"model_name": "claude-sonnet-4-20250514", "total_tokens": 0}
+        
         # 创建工具错误事件
         tool_result_event = ToolResultEvent(
             task_id=self.task_id,
@@ -186,7 +203,8 @@ class StreamingToolCallbackHandler(BaseCallbackHandler):
             result=str(error),
             status="error",
             execution_time=execution_time,
-            error_message=str(error)
+            error_message=str(error),
+            token_usage=token_usage_summary
         )
         
         # 发送事件到队列
@@ -259,6 +277,48 @@ class StreamingToolCallbackHandler(BaseCallbackHandler):
         """获取当前步骤计数"""
         return self.step_counter
     
+    def on_llm_end(
+        self, 
+        response: LLMResult,
+        *,
+        run_id: Optional[str] = None,
+        parent_run_id: Optional[str] = None,
+        **kwargs: Any
+    ) -> None:
+        """LLM调用结束时的回调，用于捕获token使用情况"""
+        
+        logger.info(f"LLM调用结束，run_id: {run_id}")
+        
+        # 从LLMResult中提取token使用信息
+        if response and response.llm_output:
+            token_usage = response.llm_output.get('token_usage', {})
+            if token_usage:
+                # 记录这次调用的token使用
+                model_name = "claude-sonnet-4-20250514"
+                input_tokens = token_usage.get('input_tokens', 0)
+                output_tokens = token_usage.get('output_tokens', 0)
+                
+                self.token_usage[run_id] = {
+                    "model_name": model_name,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "total_tokens": input_tokens + output_tokens
+                }
+                
+                # 累加到总计
+                self.total_tokens[model_name] += input_tokens + output_tokens
+                
+                print(f"🔢 [CALLBACK] LLM Token使用: input={input_tokens}, output={output_tokens}, total={input_tokens + output_tokens}")
+                logger.info(f"LLM Token使用 - 输入: {input_tokens}, 输出: {output_tokens}, 总计: {self.total_tokens[model_name]}")
+    
     def get_active_tools_count(self) -> int:
         """获取当前活跃工具数量"""
         return len(self.active_tools)
+    
+    def get_token_usage(self) -> Dict[str, int]:
+        """获取总token使用情况"""
+        return self.total_tokens.copy()
+    
+    def get_current_run_token_usage(self, run_id: str) -> Optional[Dict[str, Any]]:
+        """获取指定运行的token使用情况"""
+        return self.token_usage.get(run_id)

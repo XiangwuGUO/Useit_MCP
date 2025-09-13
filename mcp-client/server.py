@@ -17,6 +17,7 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 import json
+import httpx
 
 # 导入核心模块
 from core.api_models import *
@@ -391,14 +392,58 @@ async def list_all_paths(tool_call: ToolCall):
         if tool_call.tool_name != "list_all_paths":
             raise ValueError(f"此接口只支持list_all_paths工具，但收到: {tool_call.tool_name}")
         
-        # 直接调用list_all_paths工具
-        result = await client_manager.call_tool(
-            tool_call.vm_id,
-            tool_call.session_id, 
-            tool_call.tool_name,
-            tool_call.arguments or {},  # 确保参数不为None
-            tool_call.server_name
-        )
+        # 特殊处理：通过HTTP调用MCP服务器的直接端点
+        # 因为list_all_paths不是注册的MCP工具，使用专用HTTP端点
+        if tool_call.tool_name == "list_all_paths":
+            try:
+                # 获取对应的MCP服务器URL
+                client = await client_manager.get_client(tool_call.vm_id, tool_call.session_id)
+                if not client:
+                    raise RuntimeError(f"客户机不存在: {tool_call.vm_id}/{tool_call.session_id}")
+                
+                # 查找filesystem服务器的URL
+                filesystem_server = None
+                for server_name, server in client.servers.items():
+                    if server_name == "filesystem" or "filesystem" in server_name.lower():
+                        filesystem_server = server
+                        break
+                
+                if not filesystem_server or not filesystem_server.connected:
+                    raise RuntimeError("filesystem服务器未连接")
+                
+                # 构造HTTP端点URL
+                server_base_url = filesystem_server.remote_url.replace('/mcp', '').rstrip('/')
+                direct_endpoint_url = f"{server_base_url}/direct/list-all-paths"
+                
+                logger.info(f"调用filesystem服务器直接端点: {direct_endpoint_url}")
+                
+                # 发送HTTP GET请求
+                async with httpx.AsyncClient(timeout=30.0) as http_client:
+                    response = await http_client.get(direct_endpoint_url)
+                    
+                if response.status_code == 200:
+                    result = response.json()
+                    # 提取路径数据
+                    if isinstance(result, dict) and result.get('success') and 'data' in result:
+                        paths_data = result['data'].get('paths', [])
+                    else:
+                        paths_data = []
+                else:
+                    raise RuntimeError(f"HTTP调用失败: {response.status_code} - {response.text}")
+                    
+            except Exception as e:
+                logger.error(f"HTTP调用list_all_paths失败: {e}")
+                raise HTTPException(status_code=500, detail=f"调用list_all_paths失败: {e}")
+        else:
+            # 其他工具使用标准MCP调用
+            result = await client_manager.call_tool(
+                tool_call.vm_id,
+                tool_call.session_id, 
+                tool_call.tool_name,
+                tool_call.arguments or {},
+                tool_call.server_name
+            )
+            paths_data = result
         
         return APIResponse(
             success=True,
@@ -407,7 +452,7 @@ async def list_all_paths(tool_call: ToolCall):
                 "vm_id": tool_call.vm_id,
                 "session_id": tool_call.session_id,
                 "server_name": tool_call.server_name,
-                "paths": result
+                "paths": paths_data
             }
         )
     except Exception as e:
