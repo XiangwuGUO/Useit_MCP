@@ -24,6 +24,11 @@ mkdir -p "$LOG_DIR"
 
 # PID文件
 PID_FILE="$PROJECT_DIR/mcp_servers.pid"
+FRP_PID_FILE="$PROJECT_DIR/frp_api_server.pid"
+
+# FRP服务器路径和配置
+FRP_SERVER_DIR="$PROJECT_DIR/mcp-server/useit_frp"
+FRP_API_PORT=5888
 
 # 帮助信息
 show_help() {
@@ -40,6 +45,9 @@ show_help() {
     echo "  logs          显示日志"
     echo "  list          列出可用服务器"
     echo "  single <name> 启动单个服务器"
+    echo "  frp-start     单独启动FRP API服务器"
+    echo "  frp-stop      单独停止FRP API服务器"
+    echo "  frp-status    查看FRP API服务器状态"
     echo ""
     echo "选项:"
     echo "  --no-custom   跳过自定义服务器"
@@ -72,6 +80,128 @@ check_dependencies() {
             exit 1
         }
     }
+    
+    # 检查FRP相关依赖
+    python3 -c "import flask" 2>/dev/null || {
+        echo -e "${YELLOW}⚠️ 缺少FRP API服务器依赖，正在安装...${NC}"
+        pip3 install flask || {
+            echo -e "${RED}❌ FRP依赖安装失败${NC}"
+            exit 1
+        }
+    }
+}
+
+# 检查FRP API服务器状态
+check_frp_api_server() {
+    curl -s "http://localhost:$FRP_API_PORT/health" >/dev/null 2>&1
+    return $?
+}
+
+# 获取FRP API服务器状态
+get_frp_status() {
+    if [ -f "$FRP_PID_FILE" ]; then
+        local pid=$(cat "$FRP_PID_FILE")
+        if ps -p "$pid" > /dev/null 2>&1; then
+            if check_frp_api_server; then
+                echo -e "${GREEN}✅ FRP API服务器运行中 (PID: $pid, Port: $FRP_API_PORT)${NC}"
+                return 0
+            else
+                echo -e "${YELLOW}⚠️ FRP API服务器进程存在但API不可访问${NC}"
+                return 1
+            fi
+        else
+            echo -e "${YELLOW}⚠️ FRP PID文件存在但进程不存在${NC}"
+            rm -f "$FRP_PID_FILE"
+            return 1
+        fi
+    else
+        if check_frp_api_server; then
+            echo -e "${YELLOW}⚠️ FRP API服务器运行中但PID文件丢失${NC}"
+            return 0
+        else
+            echo -e "${RED}❌ FRP API服务器未运行${NC}"
+            return 1
+        fi
+    fi
+}
+
+# 启动FRP API服务器
+start_frp_api_server() {
+    echo -e "${BLUE}🌐 启动FRP API服务器...${NC}"
+    
+    # 检查FRP服务器目录是否存在
+    if [ ! -d "$FRP_SERVER_DIR" ]; then
+        echo -e "${RED}❌ FRP服务器目录不存在: $FRP_SERVER_DIR${NC}"
+        return 1
+    fi
+    
+    # 检查是否已经运行
+    if check_frp_api_server; then
+        echo -e "${YELLOW}⚠️ FRP API服务器已在运行${NC}"
+        return 0
+    fi
+    
+    # 检查FRP相关文件
+    if [ ! -f "$FRP_SERVER_DIR/api_server.py" ]; then
+        echo -e "${RED}❌ FRP API服务器文件不存在: $FRP_SERVER_DIR/api_server.py${NC}"
+        return 1
+    fi
+    
+    # 启动FRP API服务器
+    cd "$FRP_SERVER_DIR"
+    echo -e "${BLUE}▶️ 启动FRP API服务器 (端口: $FRP_API_PORT)${NC}"
+    
+    nohup python3 api_server.py > "$LOG_DIR/frp_api_server.log" 2>&1 &
+    local pid=$!
+    echo "$pid" > "$FRP_PID_FILE"
+    
+    # 等待启动
+    sleep 3
+    
+    # 检查是否成功启动
+    if ps -p "$pid" > /dev/null 2>&1 && check_frp_api_server; then
+        echo -e "${GREEN}✅ FRP API服务器启动成功 (PID: $pid)${NC}"
+        echo -e "${BLUE}🔗 API地址: http://localhost:$FRP_API_PORT${NC}"
+        return 0
+    else
+        echo -e "${RED}❌ FRP API服务器启动失败${NC}"
+        echo -e "${YELLOW}📋 查看日志: tail -f $LOG_DIR/frp_api_server.log${NC}"
+        rm -f "$FRP_PID_FILE"
+        return 1
+    fi
+}
+
+# 停止FRP API服务器
+stop_frp_api_server() {
+    echo -e "${BLUE}🛑 停止FRP API服务器...${NC}"
+    
+    if [ -f "$FRP_PID_FILE" ]; then
+        local pid=$(cat "$FRP_PID_FILE")
+        if ps -p "$pid" > /dev/null 2>&1; then
+            echo -e "${BLUE}📤 发送停止信号到FRP API服务器进程 $pid${NC}"
+            kill -TERM "$pid"
+            
+            # 等待进程结束
+            local count=0
+            while ps -p "$pid" > /dev/null 2>&1 && [ $count -lt 10 ]; do
+                sleep 1
+                count=$((count + 1))
+            done
+            
+            if ps -p "$pid" > /dev/null 2>&1; then
+                echo -e "${YELLOW}⚠️ FRP进程未正常结束，强制终止${NC}"
+                kill -KILL "$pid"
+                sleep 1
+            fi
+            
+            echo -e "${GREEN}✅ FRP API服务器已停止${NC}"
+        else
+            echo -e "${YELLOW}⚠️ FRP进程不存在${NC}"
+        fi
+        rm -f "$FRP_PID_FILE"
+    else
+        echo -e "${YELLOW}⚠️ FRP API服务器未运行${NC}"
+    fi
 }
 
 # 获取服务器状态
@@ -84,6 +214,10 @@ get_status() {
             # 获取详细状态
             cd "$PROJECT_DIR/mcp-server"
             python3 simple_launcher.py --status 2>/dev/null || echo "  无法获取详细状态"
+            
+            # 显示FRP API服务器状态
+            echo ""
+            get_frp_status
             
             # 检查FRP配置文件是否存在
             local frp_json
@@ -140,6 +274,14 @@ start_servers() {
     fi
     
     if [ "$enable_frp" = "true" ]; then
+        # 启动FRP模式前，先确保FRP API服务器运行
+        echo -e "${BLUE}🌐 启用FRP反向代理模式${NC}"
+        
+        if ! start_frp_api_server; then
+            echo -e "${RED}❌ FRP API服务器启动失败，无法启用FRP模式${NC}"
+            return 1
+        fi
+        
         cmd="$cmd --enable-frp"
         
         # 添加vm_id和session_id参数
@@ -150,7 +292,6 @@ start_servers() {
             cmd="$cmd --session-id $session_id"
         fi
         
-        echo -e "${BLUE}🌐 启用FRP反向代理模式${NC}"
         if [ -n "$vm_id" ]; then
             echo -e "${BLUE}🆔 VM ID: $vm_id${NC}"
         fi
@@ -175,7 +316,12 @@ start_servers() {
     echo -e "${BLUE}▶️ 执行命令: $cmd${NC}"
     echo -e "${BLUE}📋 日志文件: $SERVER_LOG${NC}"
     
-    # 后台启动
+    # 轮转总控日志（mcp_servers.log），便于追踪本次启动
+    if [ -f "$SERVER_LOG" ]; then
+        mv -f "$SERVER_LOG" "${SERVER_LOG%.log}_old.log" 2>/dev/null || true
+    fi
+    
+    # 后台启动（simple_launcher内部会将各服务器日志写入 logs/<server>_server.log）
     nohup $cmd > "$SERVER_LOG" 2>&1 &
     local pid=$!
     echo "$pid" > "$PID_FILE"
@@ -254,6 +400,9 @@ stop_servers() {
     else
         echo -e "${YELLOW}⚠️ 服务器未运行${NC}"
     fi
+    
+    # 停止FRP API服务器
+    stop_frp_api_server
     
     # 额外清理：删除可能残留的FRP配置文件
     # 检查默认工作空间和其他可能的位置
@@ -376,6 +525,15 @@ main() {
             ;;
         single-frp)
             start_single_server "$2" "true"
+            ;;
+        frp-start)
+            start_frp_api_server
+            ;;
+        frp-stop)
+            stop_frp_api_server
+            ;;
+        frp-status)
+            get_frp_status
             ;;
         help|--help|-h)
             show_help

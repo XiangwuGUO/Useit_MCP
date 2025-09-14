@@ -116,7 +116,6 @@ def resolve_in_sandbox(user_path: str, session_id: str = None) -> Path:
 
     - 支持绝对/相对路径；相对路径相对于BASE_DIR
     - 解析后必须保证在BASE_DIR沙箱目录内
-    - session_id参数保留兼容性但不影响路径解析
     """
     # 直接使用BASE_DIR作为沙箱根目录
     sandbox_root = BASE_DIR
@@ -152,7 +151,6 @@ class ListDirRequest(BaseModel):
     recursive: bool = Field(default=False)
     pattern: str | None = Field(default=None, description="glob 过滤，如 *.txt")
     files_only: bool = Field(default=True)
-    session_id: str | None = Field(default=None, description="会话ID，用于确定沙箱目录")
 
 
 class ListDirResult(BaseModel):
@@ -163,21 +161,18 @@ class ListDirResult(BaseModel):
 class ReadTextRequest(BaseModel):
     path: str
     encoding: str = Field(default="utf-8")
-    session_id: str | None = Field(default=None, description="会话ID")
 
 
 class WriteTextRequest(BaseModel):
     path: str
-    content: str
+    content: str = Field(default="", description="文件内容，默认为空字符串")
     encoding: str = Field(default="utf-8")
     append: bool = Field(default=False)
-    session_id: str | None = Field(default=None, description="会话ID")
 
 
 class ReadBinaryRequest(BaseModel):
     path: str
     max_bytes: int | None = Field(default=None, description="限制最大读取字节，None 表示不限")
-    session_id: str | None = Field(default=None, description="会话ID")
 
 
 class ReadBinaryResult(BaseModel):
@@ -190,32 +185,27 @@ class WriteBinaryRequest(BaseModel):
     path: str
     base64: str
     overwrite: bool = Field(default=True)
-    session_id: str | None = Field(default=None, description="会话ID")
 
 
 class MoveCopyRequest(BaseModel):
     src: str
     dst: str
     overwrite: bool = Field(default=False)
-    session_id: str | None = Field(default=None, description="会话ID")
 
 
 class MkdirRequest(BaseModel):
     path: str
     parents: bool = Field(default=True)
     exist_ok: bool = Field(default=True)
-    session_id: str | None = Field(default=None, description="会话ID")
 
 
 class DeleteRequest(BaseModel):
     path: str
     recursive: bool = Field(default=False)
-    session_id: str | None = Field(default=None, description="会话ID")
 
 
 class OfficeReadRequest(BaseModel):
     path: str
-    session_id: str | None = Field(default=None, description="会话ID")
 
 
 def to_file_info(p: Path, sandbox_root: Path = None) -> FileInfo:
@@ -253,19 +243,21 @@ def to_file_info(p: Path, sandbox_root: Path = None) -> FileInfo:
 # -----------------------------------------------------------------------------
 
 # 创建MCP服务器和工具实例
-mcp = FastMCP(
-    "filesystem",
-    title="标准化文件系统服务", 
-    description="提供标准化响应格式的文件系统操作功能，包括文件读写、目录管理等",
-    port=8003
-)
+mcp = FastMCP("filesystem")
 
 # 创建文件系统工具实例
 fs_tool = FileSystemTool("filesystem", BASE_DIR)
 
 @mcp.tool()
-def get_base(session_id: str = None) -> Dict[str, Any]:
-    """获取沙箱根目录。"""
+def get_base() -> Dict[str, Any]:
+    """获取当前文件系统沙箱的根目录路径。
+    
+    返回MCP服务器能够访问的基础目录路径，所有文件操作都限制在此目录下。
+    这对于了解可操作的文件范围很有用。
+    
+    Returns:
+        包含基础目录信息的响应，其中data字段包含base_directory路径
+    """
     return quick_success(
         tool_name="get_base",
         operation=OperationType.QUERY,
@@ -320,22 +312,50 @@ def list_all_paths(session_id: str = None) -> Dict[str, Any]:
         ).to_dict()
 
 @mcp.tool()
-def list_dir(req: ListDirRequest) -> Dict[str, Any]:
-    """列目录（支持递归与模式）。
+def list_dir(
+    path: str = Field(".", description="要列出的目录路径。使用'.'表示当前工作目录，可以是相对路径或绝对路径"),
+    recursive: bool = Field(False, description="是否递归搜索子目录。True表示会列出所有子目录中的文件"),
+    pattern: Optional[str] = Field(None, description="文件名过滤模式，支持glob语法。例如：'*.txt'只显示文本文件，'test*'显示以test开头的文件"),
+    files_only: bool = Field(True, description="是否只显示文件。True只显示文件，False同时显示文件和目录")
+) -> Dict[str, Any]:
+    """列出指定目录中的文件和文件夹。
     
-    默认行为：如果路径为"."或空，则列出BASE_DIR下所有文件和文件夹，
-    包括子目录，但忽略.useit文件夹，最多返回300个条目。
+    这是查看目录内容的主要工具。支持递归搜索、文件名过滤等高级功能。
+    默认情况下只显示文件，如果需要查看目录结构请设置files_only=False。
+    
+    Args:
+        path: 要列出的目录路径。使用'.'表示当前工作目录
+        recursive: 是否递归搜索子目录中的所有文件
+        pattern: 文件名过滤模式，支持通配符语法
+        files_only: 是否只显示文件（不显示目录）
+    
+    Returns:
+        包含目录内容列表的响应，每个文件/目录都有完整的元数据信息
+    
+    Examples:
+        - list_dir() 或 list_dir(".") : 列出当前目录的所有文件
+        - list_dir("docs", recursive=True) : 递归列出docs目录下的所有文件
+        - list_dir(pattern="*.py") : 只显示Python文件
+        - list_dir(files_only=False) : 显示文件和目录
     """
     builder = MCPResponseBuilder("list_dir")
     
     try:
+        # 创建请求对象
+        req = ListDirRequest(
+            path=path,
+            recursive=recursive,
+            pattern=pattern,
+            files_only=files_only
+        )
+        
         # 如果请求路径为"."或空，使用BASE_DIR并启用递归搜索
         if req.path in (".", "", "/"):
             root = BASE_DIR
             use_recursive = True
             max_items = 300
         else:
-            root = resolve_in_sandbox(req.path, req.session_id)
+            root = resolve_in_sandbox(req.path)
             use_recursive = req.recursive
             max_items = None
         
@@ -403,7 +423,7 @@ def list_dir(req: ListDirRequest) -> Dict[str, Any]:
             operation=OperationType.QUERY,
             message=f"成功列出目录 '{req.path}'，共 {len(entries)} 个条目（{file_count} 个文件，{dir_count} 个目录）",
             data={
-                **result_data.dict(),
+                **result_data.model_dump(),
                 "summary": {
                     "total_entries": len(entries),
                     "file_count": file_count,
@@ -428,12 +448,37 @@ def list_dir(req: ListDirRequest) -> Dict[str, Any]:
 
 
 @mcp.tool()
-def read_text(req: ReadTextRequest) -> Dict[str, Any]:
-    """读取文本文件。"""
+def read_text(
+    path: str = Field(..., description="要读取的文本文件路径，可以是相对路径或绝对路径。例如：'document.txt', 'folder/file.md'"),
+    encoding: str = Field("utf-8", description="文件的字符编码格式。常用值：'utf-8'(默认), 'gbk', 'ascii', 'latin-1'")
+) -> Dict[str, Any]:
+    """读取文本文件的完整内容。
+    
+    用于读取各种文本格式文件，包括源代码、配置文件、文档等。
+    支持不同的字符编码，默认使用UTF-8编码。
+    
+    Args:
+        path: 要读取的文本文件路径
+        encoding: 文件的字符编码格式，确保正确解码文件内容
+    
+    Returns:
+        包含文件完整内容的响应，同时提供文件大小、行数等元数据
+    
+    Examples:
+        - read_text("README.md") : 读取README文件
+        - read_text("config.json") : 读取JSON配置文件
+        - read_text("chinese.txt", encoding="gbk") : 读取GBK编码的中文文件
+    """
     builder = MCPResponseBuilder("read_text")
     
     try:
-        p = resolve_in_sandbox(req.path, req.session_id)
+        # 创建请求对象
+        req = ReadTextRequest(
+            path=path,
+            encoding=encoding
+        )
+        
+        p = resolve_in_sandbox(req.path)
         if not p.exists() or not p.is_file():
             return builder.error(
                 operation=OperationType.READ,
@@ -471,12 +516,44 @@ def read_text(req: ReadTextRequest) -> Dict[str, Any]:
         ).to_dict()
 
 @mcp.tool()
-def write_text(req: WriteTextRequest) -> Dict[str, Any]:
-    """写入文本文件（可 append）。"""
-    builder = MCPResponseBuilder("write_text")
+def write_file(
+    path: str = Field(..., description="要写入的文件路径。如果目录不存在会自动创建。例如：'output.txt', 'data/result.json'"),
+    content: str = Field(..., description="要写入的文本内容，不能为空"),
+    encoding: str = Field("utf-8", description="文件的字符编码格式。常用值：'utf-8'(默认), 'gbk', 'ascii'"),
+    append: bool = Field(False, description="写入模式。False表示覆盖写入(默认)，True表示追加到文件末尾")
+) -> Dict[str, Any]:
+    """创建新文件或写入/追加内容到文本文件。
+    
+    这是文件写入的主要工具。可以创建新文件、覆盖现有文件内容或追加内容到文件末尾。
+    如果目标目录不存在，会自动创建所需的目录结构。
+    
+    Args:
+        path: 要写入的文件路径，支持相对和绝对路径
+        content: 要写入的文本内容，可以是任何文本格式
+        encoding: 文件的字符编码格式
+        append: 写入模式选择（覆盖或追加）
+    
+    Returns:
+        包含操作结果的响应，显示文件是否为新创建、文件大小等信息
+    
+    Examples:
+        - write_file("hello.txt", "Hello World") : 创建文件并写入内容
+        - write_file("log.txt", "新日志\\n", append=True) : 追加日志到现有文件
+        - write_file("empty.txt") : 创建空文件
+        - write_file("data.json", json_content) : 保存JSON数据
+    """
+    builder = MCPResponseBuilder("write_file")
     
     try:
-        p = resolve_in_sandbox(req.path, req.session_id)
+        # 创建请求对象
+        req = WriteTextRequest(
+            path=path,
+            content=content,
+            encoding=encoding,
+            append=append
+        )
+        
+        p = resolve_in_sandbox(req.path)
         p.parent.mkdir(parents=True, exist_ok=True)
         
         is_new_file = not p.exists()
@@ -486,7 +563,7 @@ def write_text(req: WriteTextRequest) -> Dict[str, Any]:
             operation_type = OperationType.UPDATE
             message = f"成功追加内容到文件 '{req.path}'"
         else:
-            p.write_text(req.content, encoding=req.encoding)
+            p.write_file(req.content, encoding=req.encoding)
             operation_type = OperationType.CREATE if is_new_file else OperationType.UPDATE
             message = f"成功{'创建' if is_new_file else '更新'}文件 '{req.path}'"
         
@@ -497,6 +574,27 @@ def write_text(req: WriteTextRequest) -> Dict[str, Any]:
             encoding=req.encoding,
             operation="append" if req.append else "write"
         )
+        # 兼容序列化（支持 Pydantic/BaseModel/dataclass/dict）
+        def _serialize_fi(fi):
+            try:
+                if fi is None:
+                    return None
+                if hasattr(fi, "model_dump") and callable(getattr(fi, "model_dump")):
+                    return fi.model_dump()
+                if hasattr(fi, "dict") and callable(getattr(fi, "dict")):
+                    return fi.dict()
+                if hasattr(fi, "to_dict") and callable(getattr(fi, "to_dict")):
+                    return fi.to_dict()
+                if isinstance(fi, dict):
+                    return fi
+            except Exception:
+                pass
+            # 最后兜底：返回字符串化路径信息
+            try:
+                return {"path": str(getattr(fi, "path", p)), "name": getattr(fi, "name", p.name)}
+            except Exception:
+                return {"path": str(p)}
+        file_info_serialized = _serialize_fi(file_info)
         
         return builder.success(
             operation=operation_type,
@@ -506,10 +604,10 @@ def write_text(req: WriteTextRequest) -> Dict[str, Any]:
                 "size": p.stat().st_size,
                 "encoding": req.encoding,
                 "is_new_file": is_new_file,
-                "append_mode": req.append
+                "append_mode": req.append,
+                "file_info": file_info_serialized
             },
-            new_files=[file_info] if is_new_file else None,
-            modified_files=[file_info] if not is_new_file else None
+            new_files=[file_info_serialized] if is_new_file else None
         ).to_dict()
         
     except Exception as e:
@@ -520,12 +618,37 @@ def write_text(req: WriteTextRequest) -> Dict[str, Any]:
         ).to_dict()
 
 @mcp.tool()
-def read_binary(req: ReadBinaryRequest) -> Dict[str, Any]:
-    """读取二进制文件，返回 base64。"""
+def read_binary(
+    path: str = Field(..., description="要读取的二进制文件路径。适用于图片、音频、视频等非文本文件"),
+    max_bytes: Optional[int] = Field(None, description="限制最大读取字节数。None表示读取整个文件，设置数值可避免读取过大文件")
+) -> Dict[str, Any]:
+    """读取二进制文件并返回base64编码的内容。
+    
+    用于读取图片、音频、视频、压缩包等二进制文件。文件内容会以base64格式返回，
+    便于在JSON响应中传输和后续处理。
+    
+    Args:
+        path: 要读取的二进制文件路径
+        max_bytes: 可选的字节数限制，用于控制大文件的读取
+    
+    Returns:
+        包含base64编码内容的响应，同时提供文件大小等元数据
+    
+    Examples:
+        - read_binary("image.png") : 读取PNG图片文件
+        - read_binary("audio.mp3", max_bytes=1024000) : 读取音频文件，限制1MB
+        - read_binary("data.zip") : 读取压缩文件
+    """
     builder = MCPResponseBuilder("read_binary")
     
     try:
-        p = resolve_in_sandbox(req.path, req.session_id)
+        # 创建请求对象以保持兼容性
+        req = ReadBinaryRequest(
+            path=path,
+            max_bytes=max_bytes
+        )
+        
+        p = resolve_in_sandbox(req.path)
         if not p.exists() or not p.is_file():
             return builder.error(
                 operation=OperationType.READ,
@@ -545,7 +668,7 @@ def read_binary(req: ReadBinaryRequest) -> Dict[str, Any]:
         return builder.success(
             operation=OperationType.READ,
             message=f"成功读取二进制文件 '{req.path}'",
-            data=result.dict()
+            data=result.model_dump()
         ).to_dict()
         
     except Exception as e:
@@ -556,12 +679,40 @@ def read_binary(req: ReadBinaryRequest) -> Dict[str, Any]:
         ).to_dict()
 
 @mcp.tool()
-def write_binary(req: WriteBinaryRequest) -> Dict[str, Any]:
-    """写入二进制文件（输入 base64）。"""
+def write_binary(
+    path: str = Field(..., description="要创建的二进制文件路径。如果目录不存在会自动创建"),
+    base64_data: str = Field(..., description="base64编码的二进制数据。可以是图片、音频、压缩包等文件的base64编码"),
+    overwrite: bool = Field(True, description="如果文件已存在是否覆盖。True表示覆盖(默认)，False表示如果文件存在则报错")
+) -> Dict[str, Any]:
+    """从base64数据创建二进制文件。
+    
+    用于创建图片、音频、视频、压缩包等二进制文件。输入必须是有效的base64编码字符串。
+    如果目标目录不存在，会自动创建所需的目录结构。
+    
+    Args:
+        path: 要创建的二进制文件路径
+        base64_data: 文件内容的base64编码字符串
+        overwrite: 是否允许覆盖已存在的文件
+    
+    Returns:
+        包含操作结果的响应，显示文件是否为新创建、文件大小等信息
+    
+    Examples:
+        - write_binary("output.png", png_base64) : 创建PNG图片文件
+        - write_binary("backup.zip", zip_base64, overwrite=False) : 创建压缩文件但不覆盖
+        - write_binary("audio/sound.mp3", audio_base64) : 在子目录中创建音频文件
+    """
     builder = MCPResponseBuilder("write_binary")
     
     try:
-        p = resolve_in_sandbox(req.path, req.session_id)
+        # 创建请求对象以保持兼容性
+        req = WriteBinaryRequest(
+            path=path,
+            base64=base64_data,
+            overwrite=overwrite
+        )
+        
+        p = resolve_in_sandbox(req.path)
         
         is_new_file = not p.exists()
         if p.exists() and not req.overwrite:
@@ -572,6 +723,7 @@ def write_binary(req: WriteBinaryRequest) -> Dict[str, Any]:
             ).to_dict()
         
         p.parent.mkdir(parents=True, exist_ok=True)
+        data = base64.b64decode(req.base64)
         p.write_bytes(data)
         
         # 判断文件类型
@@ -589,6 +741,26 @@ def write_binary(req: WriteBinaryRequest) -> Dict[str, Any]:
             file_description + ("" if is_new_file else " (已更新)"),
             operation_type="binary_write"
         )
+        # 兼容序列化
+        def _serialize_fi(fi):
+            try:
+                if fi is None:
+                    return None
+                if hasattr(fi, "model_dump") and callable(getattr(fi, "model_dump")):
+                    return fi.model_dump()
+                if hasattr(fi, "dict") and callable(getattr(fi, "dict")):
+                    return fi.dict()
+                if hasattr(fi, "to_dict") and callable(getattr(fi, "to_dict")):
+                    return fi.to_dict()
+                if isinstance(fi, dict):
+                    return fi
+            except Exception:
+                pass
+            try:
+                return {"path": str(getattr(fi, "path", p)), "name": getattr(fi, "name", p.name)}
+            except Exception:
+                return {"path": str(p)}
+        file_info_serialized = _serialize_fi(file_info)
         
         operation_type = OperationType.CREATE if is_new_file else OperationType.UPDATE
         message = f"成功{'创建' if is_new_file else '更新'}二进制文件 '{req.path}'"
@@ -599,10 +771,10 @@ def write_binary(req: WriteBinaryRequest) -> Dict[str, Any]:
             data={
                 "path": req.path,
                 "size": len(data),
-                "is_new_file": is_new_file
+                "is_new_file": is_new_file,
+                "file_info": file_info_serialized
             },
-            new_files=[file_info] if is_new_file else None,
-            modified_files=[file_info] if not is_new_file else None
+            new_files=[file_info_serialized] if is_new_file else None
         ).to_dict()
         
     except Exception as e:
@@ -613,12 +785,41 @@ def write_binary(req: WriteBinaryRequest) -> Dict[str, Any]:
         ).to_dict()
 
 @mcp.tool()
-def mkdir(req: MkdirRequest) -> Dict[str, Any]:
-    """创建目录。"""
+def mkdir(
+    path: str = Field(..., description="要创建的目录路径。可以是相对路径或绝对路径，支持创建多层嵌套目录"),
+    parents: bool = Field(True, description="是否自动创建父目录。True表示会创建路径中所有不存在的父目录"),
+    exist_ok: bool = Field(True, description="如果目录已存在的处理方式。True表示不报错(默认)，False表示已存在时抛出错误")
+) -> Dict[str, Any]:
+    """创建新目录。
+    
+    用于创建单个目录或多层嵌套目录结构。默认会自动创建所需的父目录，
+    如果目录已存在也不会报错。
+    
+    Args:
+        path: 要创建的目录路径
+        parents: 是否自动创建缺失的父目录
+        exist_ok: 目录已存在时的处理方式
+    
+    Returns:
+        包含目录创建结果的响应，显示是否为新创建的目录
+    
+    Examples:
+        - mkdir("new_folder") : 创建单个目录
+        - mkdir("project/src/utils") : 创建多层嵌套目录
+        - mkdir("temp", exist_ok=False) : 如果目录已存在则报错
+        - mkdir("docs", parents=False) : 不自动创建父目录
+    """
     builder = MCPResponseBuilder("mkdir")
     
     try:
-        p = resolve_in_sandbox(req.path, req.session_id)
+        # 创建请求对象
+        req = MkdirRequest(
+            path=path,
+            parents=parents,
+            exist_ok=exist_ok
+        )
+        
+        p = resolve_in_sandbox(req.path)
         is_new_dir = not p.exists()
         p.mkdir(parents=req.parents, exist_ok=req.exist_ok)
         
@@ -664,15 +865,44 @@ def mkdir(req: MkdirRequest) -> Dict[str, Any]:
         ).to_dict()
 
 @mcp.tool()
-def move(req: MoveCopyRequest) -> Dict[str, Any]:
-    """移动文件/目录。"""
+def move(
+    src: str = Field(..., description="源文件或目录的路径。要移动的文件或目录必须存在"),
+    dst: str = Field(..., description="目标路径。可以是新的文件名或目录路径"),
+    overwrite: bool = Field(False, description="如果目标已存在是否覆盖。False表示不覆盖并报错(默认)，True表示覆盖现有文件")
+) -> Dict[str, Any]:
+    """移动文件或目录到新位置。
+    
+    将文件或目录从源位置移动到目标位置。这是一个剪切操作，源文件/目录在移动后将不再存在。
+    支持重命名（在同一目录内移动）和跨目录移动。
+    
+    Args:
+        src: 要移动的源文件或目录路径
+        dst: 目标位置路径
+        overwrite: 是否允许覆盖已存在的目标
+    
+    Returns:
+        包含移动操作结果的响应，显示源路径、目标路径等信息
+    
+    Examples:
+        - move("old_name.txt", "new_name.txt") : 重命名文件
+        - move("temp.txt", "backup/temp.txt") : 移动文件到子目录
+        - move("old_folder", "new_folder") : 重命名目录
+        - move("file.txt", "existing.txt", overwrite=True) : 覆盖已存在的文件
+    """
     builder = MCPResponseBuilder("move")
     
     try:
-        src = resolve_in_sandbox(req.src, req.session_id)
-        dst = resolve_in_sandbox(req.dst, req.session_id)
+        # 创建请求对象以保持兼容性
+        req = MoveCopyRequest(
+            src=src,
+            dst=dst,
+            overwrite=overwrite
+        )
         
-        if not src.exists():
+        src_path = resolve_in_sandbox(req.src)
+        dst_path = resolve_in_sandbox(req.dst)
+        
+        if not src_path.exists():
             return builder.error(
                 operation=OperationType.UPDATE,
                 message="源文件不存在",
@@ -680,16 +910,16 @@ def move(req: MoveCopyRequest) -> Dict[str, Any]:
             ).to_dict()
         
         # 检查目标是否已存在
-        dst_existed = dst.exists()
-        is_src_dir = src.is_dir()
+        dst_existed = dst_path.exists()
+        is_src_dir = src_path.is_dir()
         
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        if dst.exists():
+        dst_path.parent.mkdir(parents=True, exist_ok=True)
+        if dst_path.exists():
             if req.overwrite:
-                if dst.is_dir():
-                    shutil.rmtree(dst)
+                if dst_path.is_dir():
+                    shutil.rmtree(dst_path)
                 else:
-                    dst.unlink()
+                    dst_path.unlink()
             else:
                 return builder.error(
                     operation=OperationType.UPDATE,
@@ -697,11 +927,11 @@ def move(req: MoveCopyRequest) -> Dict[str, Any]:
                     error_details=f"目标 '{req.dst}' 已存在，使用 overwrite=True 覆盖"
                 ).to_dict()
         
-        shutil.move(str(src), str(dst))
+        shutil.move(str(src_path), str(dst_path))
         
         # 创建文件信息
         file_info = fs_tool.create_file_info_from_path(
-            dst,
+            dst_path,
             f"移动的{'目录' if is_src_dir else '文件'}",
             source=req.src,
             move_operation=True
@@ -728,15 +958,44 @@ def move(req: MoveCopyRequest) -> Dict[str, Any]:
         ).to_dict()
 
 @mcp.tool()
-def copy(req: MoveCopyRequest) -> Dict[str, Any]:
-    """复制文件/目录。"""
+def copy(
+    src: str = Field(..., description="源文件或目录的路径。要复制的文件或目录必须存在"),
+    dst: str = Field(..., description="目标路径。复制后的新文件或目录位置"),
+    overwrite: bool = Field(False, description="如果目标已存在是否覆盖。False表示不覆盖并报错(默认)，True表示覆盖现有文件")
+) -> Dict[str, Any]:
+    """复制文件或目录到新位置。
+    
+    创建文件或目录的副本。原始文件/目录保持不变，在目标位置创建相同的拷贝。
+    支持文件复制和整个目录树的递归复制。
+    
+    Args:
+        src: 要复制的源文件或目录路径
+        dst: 目标位置路径
+        overwrite: 是否允许覆盖已存在的目标
+    
+    Returns:
+        包含复制操作结果的响应，显示源路径、目标路径等信息
+    
+    Examples:
+        - copy("document.txt", "backup.txt") : 复制文件
+        - copy("project", "project_backup") : 复制整个目录
+        - copy("config.json", "configs/new_config.json") : 复制到子目录
+        - copy("data.db", "old_data.db", overwrite=True) : 覆盖已存在的文件
+    """
     builder = MCPResponseBuilder("copy")
     
     try:
-        src = resolve_in_sandbox(req.src, req.session_id)
-        dst = resolve_in_sandbox(req.dst, req.session_id)
+        # 创建请求对象以保持兼容性
+        req = MoveCopyRequest(
+            src=src,
+            dst=dst,
+            overwrite=overwrite
+        )
         
-        if not src.exists():
+        src_path = resolve_in_sandbox(req.src)
+        dst_path = resolve_in_sandbox(req.dst)
+        
+        if not src_path.exists():
             return builder.error(
                 operation=OperationType.CREATE,
                 message="源文件不存在",
@@ -744,27 +1003,27 @@ def copy(req: MoveCopyRequest) -> Dict[str, Any]:
             ).to_dict()
         
         # 检查目标是否已存在以及源的类型
-        dst_existed = dst.exists()
-        is_src_dir = src.is_dir()
+        dst_existed = dst_path.exists()
+        is_src_dir = src_path.is_dir()
         
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        if dst.exists() and not req.overwrite:
+        dst_path.parent.mkdir(parents=True, exist_ok=True)
+        if dst_path.exists() and not req.overwrite:
             return builder.error(
                 operation=OperationType.CREATE,
                 message="目标已存在",
                 error_details=f"目标 '{req.dst}' 已存在，使用 overwrite=True 覆盖"
             ).to_dict()
         
-        if src.is_dir():
-            if dst.exists():
-                shutil.rmtree(dst)
-            shutil.copytree(src, dst)
+        if src_path.is_dir():
+            if dst_path.exists():
+                shutil.rmtree(dst_path)
+            shutil.copytree(src_path, dst_path)
         else:
-            shutil.copy2(src, dst)
+            shutil.copy2(src_path, dst_path)
         
         # 创建文件信息
         file_info = fs_tool.create_file_info_from_path(
-            dst,
+            dst_path,
             f"复制的{'目录' if is_src_dir else '文件'}",
             source=req.src,
             copy_operation=True
@@ -790,12 +1049,41 @@ def copy(req: MoveCopyRequest) -> Dict[str, Any]:
         ).to_dict()
 
 @mcp.tool()
-def delete(req: DeleteRequest) -> Dict[str, Any]:
-    """删除文件/目录。"""
+def delete(
+    path: str = Field(..., description="要删除的文件或目录路径"),
+    recursive: bool = Field(False, description="删除目录时是否递归删除。False表示只能删除空目录，True表示删除目录及其所有内容")
+) -> Dict[str, Any]:
+    """删除文件或目录。
+    
+    永久删除指定的文件或目录。对于目录，默认只能删除空目录，
+    如需删除非空目录需要设置recursive=True。请谨慎使用此功能。
+    
+    Args:
+        path: 要删除的文件或目录路径
+        recursive: 是否递归删除非空目录
+    
+    Returns:
+        包含删除操作结果的响应，显示删除的项目类型和大小等信息
+    
+    Examples:
+        - delete("temp.txt") : 删除文件
+        - delete("empty_folder") : 删除空目录
+        - delete("project_folder", recursive=True) : 递归删除目录及其所有内容
+    
+    Warning:
+        删除操作是不可逆的，请确认路径正确后再执行。
+        recursive=True 会删除目录下的所有文件和子目录。
+    """
     builder = MCPResponseBuilder("delete")
     
     try:
-        p = resolve_in_sandbox(req.path, req.session_id)
+        # 创建请求对象以保持兼容性
+        req = DeleteRequest(
+            path=path,
+            recursive=recursive
+        )
+        
+        p = resolve_in_sandbox(req.path)
         
         if not p.exists():
             return builder.success(
@@ -907,12 +1195,37 @@ def _read_pptx_text(p: Path) -> str:
 
 
 @mcp.tool()
-def read_office_text(req: OfficeReadRequest) -> Dict[str, Any]:
-    """读取 Office 文本（PDF/DOCX/PPTX）。"""
+def read_office_text(
+    path: str = Field(..., description="Office文件路径，支持PDF(.pdf)、Word文档(.docx)、PowerPoint演示文稿(.pptx)格式"),
+) -> Dict[str, Any]:
+    """从Office文档中提取纯文本内容。
+    
+    从PDF、Word文档、PowerPoint演示文稿中提取纯文本内容，便于文档分析和处理。
+    支持多页PDF、多段落Word文档和多张幻灯片的PowerPoint文件。
+    
+    Args:
+        path: 要读取的Office文件路径，必须是.pdf、.docx或.pptx格式
+    
+    Returns:
+        包含提取文本内容的响应，同时提供文档类型、文本长度等元数据
+    
+    Examples:
+        - read_office_text("report.pdf") : 提取PDF文档文本
+        - read_office_text("document.docx") : 提取Word文档文本  
+        - read_office_text("presentation.pptx") : 提取PowerPoint文本
+    
+    Note:
+        需要安装相应的依赖包：pypdf(PDF)、python-docx(Word)、python-pptx(PowerPoint)
+    """
     builder = MCPResponseBuilder("read_office_text")
     
     try:
-        p = resolve_in_sandbox(req.path, req.session_id)
+        # 创建请求对象以保持兼容性
+        req = OfficeReadRequest(
+            path=path
+        )
+        
+        p = resolve_in_sandbox(req.path)
         if not p.exists() or not p.is_file():
             return builder.error(
                 operation=OperationType.READ,
@@ -971,16 +1284,46 @@ class SyncResult(BaseModel):
     synced_files: List[str] = Field(default_factory=list)
 
 @mcp.tool()
-def sync_files_to_target(req: SyncRequest) -> Dict[str, Any]:
-    """将本地BASE_DIR中的文件同步到目标路径。"""
+def sync_files_to_target(
+    vm_id: str = Field(..., description="虚拟机标识符，用于区分不同的虚拟机实例"),
+    session_id: str = Field(..., description="会话标识符，用于区分不同的用户会话"),
+    target_base_path: str = Field(..., description="目标同步路径，文件将被同步到此路径下的子目录中")
+) -> Dict[str, Any]:
+    """将当前工作目录中的文件同步到指定的目标路径。
+    
+    将本地BASE_DIR中的文本文件（.txt, .md, .json, .yaml等）同步到目标路径。
+    会在目标路径下创建以vm_id和session_id命名的子目录来存放同步的文件。
+    
+    Args:
+        vm_id: 虚拟机标识符，用于创建唯一的同步目录
+        session_id: 会话标识符，与vm_id一起确保目录唯一性
+        target_base_path: 目标根路径，同步的文件将存放在此路径下
+    
+    Returns:
+        包含同步操作结果的响应，显示同步的文件数量和文件列表
+    
+    Examples:
+        - sync_files_to_target("vm1", "session1", "/backup") : 同步到/backup/vm1_session1/
+        - sync_files_to_target("prod", "user123", "/shared/sync") : 同步到/shared/sync/prod_user123/
+    
+    Note:
+        只同步文本格式文件，限制最多同步50个文件，会保持原有的目录结构
+    """
     builder = MCPResponseBuilder("sync_files_to_target")
     
     try:
+        # 创建请求对象以保持兼容性
+        req = SyncRequest(
+            vm_id=vm_id,
+            session_id=session_id,
+            target_base_path=target_base_path
+        )
+        
         # 这里是简化版本，实际可以根据需要扩展
-        target_base_path = Path(req.target_base_path) / f"{req.vm_id}_{req.session_id}"
+        target_base_path_obj = Path(req.target_base_path) / f"{req.vm_id}_{req.session_id}"
         
         # 创建目标目录
-        target_base_path.mkdir(parents=True, exist_ok=True)
+        target_base_path_obj.mkdir(parents=True, exist_ok=True)
         
         # 扫描本地文件 - 简化版本只同步文本文件
         synced_files = []
@@ -990,7 +1333,7 @@ def sync_files_to_target(req: SyncRequest) -> Dict[str, Any]:
             if file_path.is_file() and file_path.suffix.lower() in text_extensions:
                 try:
                     relative_path = file_path.relative_to(BASE_DIR)
-                    target_file_path = target_base_path / relative_path
+                    target_file_path = target_base_path_obj / relative_path
                     
                     # 确保目标父目录存在
                     target_file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1007,14 +1350,14 @@ def sync_files_to_target(req: SyncRequest) -> Dict[str, Any]:
         
         result = SyncResult(
             success=True,
-            message=f"成功同步 {len(synced_files)} 个文件到 {target_base_path}",
+            message=f"成功同步 {len(synced_files)} 个文件到 {target_base_path_obj}",
             synced_files=synced_files
         )
         
         return builder.success(
             operation=OperationType.SYSTEM,
             message=result.message,
-            data=result.dict()
+            data=result.model_dump()
         ).to_dict()
         
     except Exception as e:

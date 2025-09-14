@@ -14,45 +14,75 @@ import requests
 import json
 import time
 from typing import Optional, Dict, Any, Tuple
+from pathlib import Path
+from register_from_json import register_all_servers_from_json, load_mcp_config
 
 # 配置常量
 DEFAULT_MCP_CLIENT_URL = "http://localhost:8080"
 
 
-def register_single_mcp_server(
-    mcp_client_url: str, 
-    vm_id: str, 
-    session_id: str,
-    server_name: str,
-    server_url: str
-) -> bool:
-    """注册单个MCP服务器"""
+def register_from_json(mcp_client_url: str, vm_id: str, session_id: str, json_path: str = None) -> bool:
+    """从JSON文件注册MCP服务器"""
+    print(f"📝 从JSON文件注册MCP服务器...")
     
-    print(f"📡 注册单个MCP服务器: {server_name} -> {server_url}")
+    # 如果没有提供路径，使用默认路径
+    if json_path is None:
+        raise ValueError("JSON路径不能为空")
+    
+    json_file = Path(json_path)
+    if not json_file.exists():
+        print(f"❌ JSON注册文件不存在: {json_file}")
+        print("💡 请先运行MCP服务器生成配置文件: ./start_simple_servers.sh start")
+        return False
+    
+    print(f"📍 JSON文件路径: {json_file}")
     
     try:
-        payload = {
-            "vm_id": vm_id,
-            "session_id": session_id,
-            "name": server_name,
-            "url": server_url,
-            "description": f"{server_name} MCP服务器",
-            "transport": "http"
-        }
+        with open(json_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
         
-        response = requests.post(f"{mcp_client_url}/clients", json=payload, timeout=10)
+        servers = data.get('servers', [])
+        if not servers:
+            print("❌ JSON文件中没有服务器配置")
+            return False
         
-        if response.status_code == 200:
-            print(f"✅ {server_name} 注册成功")
-            return True
-        else:
-            print(f"⚠️ {server_name} 注册响应: HTTP {response.status_code}")
-            if response.status_code == 400:
-                print(f"   (服务器可能已存在，继续)")
-            return True  # 已存在也算成功
+        print(f"📊 发现 {len(servers)} 个服务器配置")
+        success_count = 0
+        
+        for server in servers:
+            server_name = server.get('name', 'unknown')
+            server_url = server.get('url', '')
             
+            print(f"   📡 注册服务器: {server_name} -> {server_url}")
+            
+            try:
+                payload = {
+                    "vm_id": vm_id,
+                    "session_id": session_id,
+                    "name": server_name,
+                    "url": server_url,
+                    "description": server.get('description', f'{server_name} MCP服务器'),
+                    "transport": server.get('transport', 'http')
+                }
+                
+                response = requests.post(f"{mcp_client_url}/clients", json=payload, timeout=10)
+                if response.status_code == 200:
+                    print(f"      ✅ {server_name} 注册成功")
+                    success_count += 1
+                else:
+                    print(f"      ⚠️ {server_name} 注册响应: HTTP {response.status_code}")
+                    if response.status_code == 400:
+                        print(f"         (可能服务器已存在)")
+                    success_count += 1  # 已存在也算成功
+                    
+            except Exception as e:
+                print(f"      ❌ {server_name} 注册异常: {e}")
+        
+        print(f"✅ 成功注册 {success_count}/{len(servers)} 个服务器")
+        return success_count > 0
+        
     except Exception as e:
-        print(f"❌ {server_name} 注册异常: {e}")
+        print(f"❌ 处理JSON文件失败: {e}")
         return False
 
 
@@ -344,6 +374,48 @@ def check_mcp_client_status(mcp_client_url: str) -> bool:
         return False
 
 
+def register_servers_from_json_config(json_config_path: str, mcp_client_url: str) -> Tuple[bool, str, str]:
+    """
+    从JSON配置文件注册MCP服务器
+    
+    Args:
+        json_config_path: JSON配置文件路径
+        mcp_client_url: MCP客户端URL（用于覆盖配置文件中的registry_url）
+        
+    Returns:
+        Tuple[bool, str, str]: (是否成功, vm_id, session_id)
+    """
+    print("🔗 使用JSON配置文件注册MCP服务器...")
+    print(f"   📄 配置文件: {json_config_path}")
+    
+    try:
+        # 检查文件是否存在
+        if not Path(json_config_path).exists():
+            print(f"❌ 配置文件不存在: {json_config_path}")
+            return False, "", ""
+        
+        # 加载配置获取vm_id和session_id
+        config = load_mcp_config(json_config_path)
+        vm_id = config['vm_id']
+        session_id = config['session_id']
+        
+        print(f"   📍 会话信息: {vm_id}/{session_id}")
+        
+        # 使用指定的MCP客户端URL进行注册
+        success, result = register_all_servers_from_json(json_config_path, mcp_client_url)
+        
+        if success:
+            print(f"✅ JSON配置注册成功，注册了 {result['successful_count']} 个服务器")
+            return True, vm_id, session_id
+        else:
+            print(f"❌ JSON配置注册失败: {result.get('error', '未知错误')}")
+            return False, vm_id, session_id
+            
+    except Exception as e:
+        print(f"❌ JSON注册过程异常: {e}")
+        return False, "", ""
+
+
 def main():
     """主演示函数"""
     print("🚀 简化流式MCP客户端演示")
@@ -351,18 +423,11 @@ def main():
     
     # 配置
     mcp_client_url = DEFAULT_MCP_CLIENT_URL
-    vm_id = "demo_vm"
-    session_id = "demo_session"
     
-    # 可配置的MCP服务器信息
-    mcp_server_name = "filesystem"
-    mcp_server_url = "http://localhost:8003/mcp"
-    
-    print(f"🎯 配置信息:")
-    print(f"   📡 MCP客户端URL: {mcp_client_url}")
-    print(f"   📍 会话: {vm_id}/{session_id}")
-    print(f"   🔧 MCP服务器: {mcp_server_name} -> {mcp_server_url}")
-    print()
+    # 尝试使用JSON配置文件注册（如果存在）
+    json_path = "/home/ubuntu/workspace/gxw/useit_mcp_new/useit_mcp_test_dir/.useit/mcp_server_frp.json"
+    vm_id = "vm123"
+    session_id = "sess456"
     
     # 1. 检查客户端状态
     print("1️⃣ 检查MCP客户端状态...")
@@ -372,22 +437,36 @@ def main():
     print()
     
     # 2. 注册MCP服务器
-    print("2️⃣ 注册MCP服务器...")
-    if not register_single_mcp_server(mcp_client_url, vm_id, session_id, 
-                                     mcp_server_name, mcp_server_url):
-        print("❌ MCP服务器注册失败")
-        return
-    print()
+    print("\n" + "=" * 40)
+    print("📋 步骤1: 从JSON文件注册服务器")
+    print("=" * 40)
+    registration_success = register_from_json(mcp_client_url, vm_id, session_id, json_path)
     
-    # 3. 执行流式任务
-    print("3️⃣ 执行流式任务...")
-    task_description = "查看目录下的simple_pdf文件"
+    if not registration_success:
+        print("\n⚠️ 服务器注册失败，但继续演示...")
     
+    # # 3. 执行流式任务
+    # print("3️⃣ 执行流式任务...")
+    # 3. 测试流式任务执行
+    print("3️⃣ 测试流式任务执行...")
+    # task_description = "Create a new Markdown file named 'Flat_White_Tutorial.txt' in the sandbox root containing a concise, step-by-step tutorial on making a Flat White: include sections for Overview, Equipment, Ingredients with measurements (e.g., 18g espresso yielding ~36g in 25–30s; 120–150 ml milk), Steps (dose and tamp, pull double-shot espresso, steam milk to 55–60°C/130–140°F with fine microfoam, pour with a thin stream to integrate crema and finish with a simple heart), Tips (bean choice, grind adjustments, milk texturing cues, cleaning), and Variations (iced flat white, alternative milks)."
+    task_description = '''Create a new Markdown file named 'test.md' and write the string: 'JSON 注册
+文件: mcp-client/register_from_json.py、simple_streaming_demo.py
+步骤: 读取 FRP 生成的 mcp_server_frp.json → 取每个 server 的 url（公网地址）→ 调用 MCP 网关 POST /clients 注册这些 server。
+获取工具
+由执行器在运行时连接到已注册的 MCP 服务器，通过 langchain-mcp-adapters 将 MCP 工具转成 LangChain 工具（StructuredTool）。
+二、Agent 构建与消息流
+执行器
+文件: mcp-client/core/langchain_executor.py（非流式）与 core/streaming_executor.py（流式）
+作用: 负责
+创建/复用包含 MCP 工具的 LangChain Agent
+绑定模型（如 ChatAnthropic）
+在流式模式下，暴露 SSE 事件，实时回传工具步骤与结果' to it'''
     streaming_success, streaming_result = call_streaming_task(
         mcp_client_url=mcp_client_url,
         vm_id=vm_id,
         session_id=session_id,
-        mcp_server_name=mcp_server_name,
+        mcp_server_name="filesystem",
         task_description=task_description
     )
     print()

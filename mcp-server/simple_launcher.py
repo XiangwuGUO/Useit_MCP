@@ -118,6 +118,38 @@ class SimpleMCPLauncher:
         self._cleanup_registered = False
         self.active_frp_tunnels = {}  # 存储隧道ID而不是隧道对象
         self.base_dir = os.environ.get('MCP_BASE_DIR', os.path.join(os.getcwd(), 'mcp_workspace'))
+        # 记录每个服务器实际使用的端口（用于FRP注册与JSON一致）
+        self.server_ports: Dict[str, int] = {}
+        # 日志目录（位于项目根目录 logs/）
+        try:
+            project_root = Path(__file__).resolve().parents[1]
+            self.log_dir = project_root / 'logs'
+            self.log_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            self.log_dir = Path(os.getcwd())
+        # 记录每个服务器的日志文件句柄，便于关闭
+        self.server_log_files = {}
+    
+    def _get_log_file_path(self, server_name: str) -> Path:
+        """获取服务器日志文件路径"""
+        return self.log_dir / f"{server_name}_server.log"
+    
+    def _rotate_log_file(self, log_path: Path):
+        """将现有日志文件重命名为 *_old.log，再写入新日志文件"""
+        try:
+            if log_path.exists():
+                old_path = log_path.with_name(f"{log_path.stem}_old{log_path.suffix}")
+                try:
+                    if old_path.exists():
+                        old_path.unlink()
+                except Exception:
+                    pass
+                try:
+                    log_path.rename(old_path)
+                except Exception:
+                    pass
+        except Exception:
+            pass
         
     def _register_cleanup(self):
         """注册退出清理（仅在实际启动服务器时调用）"""
@@ -205,13 +237,24 @@ class SimpleMCPLauncher:
         if config.transport == "stdio":
             cmd.append("stdio")
         
-        # 启动进程
+        # 准备日志文件：旋转旧日志后重新写入
+        log_path = self._get_log_file_path(config.name)
+        self._rotate_log_file(log_path)
+        try:
+            log_file = open(log_path, 'w', encoding='utf-8')
+        except Exception:
+            log_file = subprocess.DEVNULL
+
+        # 启动进程，输出重定向到对应日志
         process = subprocess.Popen(
             cmd,
             env={**os.environ, **env},
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
+            stdout=log_file,
+            stderr=log_file
         )
+        # 保存日志句柄
+        if log_file is not subprocess.DEVNULL:
+            self.server_log_files[config.name] = log_file
         
         # 等待启动
         time.sleep(1)
@@ -221,6 +264,12 @@ class SimpleMCPLauncher:
             address = f"http://localhost:{port}/mcp"
         else:
             address = f"stdio://localhost:{port}"
+        
+        # 保存实际端口
+        try:
+            self.server_ports[config.name] = int(port)
+        except Exception:
+            pass
         
         print(f"✅ {config.name} 启动成功: {address}")
         return address, process
@@ -297,7 +346,10 @@ class SimpleMCPLauncher:
             servers = []
             
             for server_name, address in addresses.items():
-                port = self._extract_port_from_address(address)
+                # 优先使用启动时记录的真实端口
+                port = self.server_ports.get(server_name)
+                if not port:
+                    port = self._extract_port_from_address(address)
                 
                 # 查找服务器配置获取描述
                 all_configs = self.get_official_servers() + self.load_custom_servers_config()
@@ -345,12 +397,15 @@ class SimpleMCPLauncher:
                 else:
                     print(f"⚠️ FRP 功能未可用，使用本地地址: {server_name}")
                 
+                # 本地URL用真实端口构建，避免与实际监听不一致
+                local_url = f"http://localhost:{port}/mcp" if config and config.transport == 'streamable-http' else address
+
                 server_data = {
                     "name": server_name,
                     "url": public_url or address,
                     "description": description,
                     "transport": "http",
-                    "local_url": address,
+                    "local_url": local_url,
                     "public_url": public_url,
                     "frp_enabled": frp_enabled,
                     "tunnel_id": tunnel_id,
@@ -390,7 +445,10 @@ class SimpleMCPLauncher:
             useit_dir = os.path.join(self.base_dir, '.useit')
             os.makedirs(useit_dir, exist_ok=True)
             
-            port = self._extract_port_from_address(address)
+            # 优先使用记录的真实端口
+            port = self.server_ports.get(config.name)
+            if not port:
+                port = self._extract_port_from_address(address)
             public_url = None
             frp_enabled = False
             tunnel_id = None
@@ -432,12 +490,14 @@ class SimpleMCPLauncher:
             else:
                 print(f"⚠️ FRP 功能未可用，使用本地地址: {config.name}")
             
+            local_url = f"http://localhost:{port}/mcp" if config and config.transport == 'streamable-http' else address
+
             server_data = {
                 "name": config.name,
                 "url": public_url or address,
                 "description": config.description,
                 "transport": "http",
-                "local_url": address,
+                "local_url": local_url,
                 "public_url": public_url,
                 "frp_enabled": frp_enabled,
                 "tunnel_id": tunnel_id,
@@ -482,6 +542,14 @@ class SimpleMCPLauncher:
         
         self.running_processes.clear()
         self.server_addresses.clear()
+        # 关闭日志文件
+        for name, f in list(self.server_log_files.items()):
+            try:
+                f.flush()
+                f.close()
+            except Exception:
+                pass
+            self.server_log_files.pop(name, None)
         
     def cleanup(self):
         """清理资源"""

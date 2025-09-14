@@ -50,8 +50,8 @@ class LangChainMCPExecutor:
             TaskResult: 任务执行结果
         """
         try:
-            # 1. 获取或创建Agent
-            agent = await self._get_agent(task_request.vm_id, task_request.session_id)
+            # 1. 获取或创建Agent（按 vm/session/server 粒度缓存）
+            agent = await self._get_agent(task_request.vm_id, task_request.session_id, task_request.mcp_server_name)
             
             # 2. 构建任务消息
             messages = self._build_task_messages(task_request)
@@ -92,14 +92,15 @@ class LangChainMCPExecutor:
                 execution_time_seconds=0.0
             )
     
-    async def _get_agent(self, vm_id: str, session_id: str):
-        """获取或创建指定客户端的LangChain Agent"""
+    async def _get_agent(self, vm_id: str, session_id: str, mcp_server_name: Optional[str] = None):
+        """获取或创建指定客户端(可选指定MCP服务器)的LangChain Agent"""
         
-        agent_key = f"{vm_id}_{session_id}"
+        server_key = mcp_server_name or "__ALL__"
+        agent_key = f"{vm_id}_{session_id}_{server_key}"
         
         if agent_key not in self.agents:
-            # 1. 构建MCP服务器配置
-            mcp_config = await self._build_mcp_config(vm_id, session_id)
+            # 1. 构建MCP服务器配置（若指定 server，仅加载该服务器工具）
+            mcp_config = await self._build_mcp_config(vm_id, session_id, mcp_server_name)
             
             # 2. 创建MCP客户端
             mcp_client = MultiServerMCPClient(mcp_config)
@@ -143,8 +144,8 @@ class LangChainMCPExecutor:
         
         return self.agents[agent_key]["agent"]
     
-    async def _build_mcp_config(self, vm_id: str, session_id: str) -> Dict:
-        """构建MCP服务器配置"""
+    async def _build_mcp_config(self, vm_id: str, session_id: str, mcp_server_name: Optional[str] = None) -> Dict:
+        """构建MCP服务器配置（可选过滤到指定的 MCP 服务器）"""
         
         client = await self.client_manager.get_client(vm_id, session_id)
         if not client:
@@ -152,63 +153,94 @@ class LangChainMCPExecutor:
         
         mcp_config = {}
         
-        for server_name, server in client.servers.items():
-            if server.connected:
-                # 避免重复添加/mcp路径 - server.remote_url已经包含了正确的端点
+        # 可选：仅选择指定的服务器
+        target_names: List[str]
+        if mcp_server_name:
+            target_names = [mcp_server_name]
+        else:
+            target_names = list(client.servers.keys())
+
+        for server_name in target_names:
+            server = client.servers.get(server_name)
+            if server and server.connected:
                 mcp_url = server.remote_url
                 if not mcp_url.endswith("/mcp"):
                     mcp_url = f"{mcp_url}/mcp"
-                
                 mcp_config[server_name] = {
-                    "transport": "streamable_http", 
-                    "url": mcp_url
+                    "transport": "streamable_http",
+                    "url": mcp_url,
                 }
         
         if not mcp_config:
-            raise ValueError(f"客户端 {vm_id}/{session_id} 没有可用的MCP服务器")
+            if mcp_server_name:
+                raise ValueError(f"Client {vm_id}/{session_id} has no available MCP server '{mcp_server_name}'")
+            raise ValueError(f"Client {vm_id}/{session_id} has no available MCP servers")
         
         return mcp_config
     
     def _build_system_prompt(self, tools: List) -> SystemMessage:
-        """Build system prompt"""
+        """Build system prompt (English)"""
         
         tool_descriptions = []
         for tool in tools:
-            tool_descriptions.append(f"- {tool.name}: {tool.description}")
+            # Enhanced tool description with parameter hints
+            description = f"- {tool.name}: {tool.description}"
+            
+            # Add parameter information if available
+            if hasattr(tool, 'args_schema') and tool.args_schema:
+                try:
+                    schema = tool.args_schema
+                    if hasattr(schema, 'model_fields'):
+                        fields = schema.model_fields
+                        required_fields = []
+                        for field_name, field_info in fields.items():
+                            if hasattr(field_info, 'is_required') and field_info.is_required():
+                                required_fields.append(field_name)
+                            elif hasattr(field_info, 'default') and field_info.default is ...:  # Ellipsis means required
+                                required_fields.append(field_name)
+                        
+                        if required_fields:
+                            description += f" (Required: {', '.join(required_fields)})"
+                except Exception:
+                    pass  # Skip if schema parsing fails
+            
+            tool_descriptions.append(description)
         
-        prompt_text = f"""You are an intelligent assistant that can use various tools to complete user tasks. Please use the appropriate tools directly to accomplish user requests:
+        prompt_text = f"""You are an intelligent assistant that can use MCP tools exposed by connected servers.
+Follow these principles and use tools directly to complete the user's request.
 
 Available tools:
 {chr(10).join(tool_descriptions)}
 
 Execution principles:
-- Use the most appropriate tool directly for each task
-- For file operations: use available file tools (read, write, list, etc.)
-- For audio processing: use available audio tools
-- For web searches: use available search tools
-- For any other tasks: use the most suitable available tool
-- Provide clear execution results
-- Think step by step and use multiple tools if needed
+- Call the most appropriate tool directly for each step
+- IMPORTANT: Always provide ALL required parameters for each tool call
+- For file operations: use filesystem tools (read, write, list, mkdir, copy, move, delete)
+- For audio processing: use audio tools provided by the server
+- Prefer tool results over assumptions; read/verify before writing
+- Provide clear, concise results; include paths and summaries when creating files
+- Think step-by-step; use multiple tools if needed to achieve the goal
+- If a tool call fails due to missing parameters, review the tool requirements and retry with complete parameters
 
-Please complete the user's task using the available tools."""
+Now complete the user's task using the available tools."""
         
         return SystemMessage(content=prompt_text)
     
     def _build_task_messages(self, task_request: TaskRequest) -> List:
-        """构建任务消息"""
+        """Build task messages (English)"""
         
         messages = []
         
-        # 系统消息（如果需要额外的任务特定提示）
+        # Optional task-specific system context
         if task_request.context:
-            messages.append(SystemMessage(content=f"任务上下文: {task_request.context}"))
+            messages.append(SystemMessage(content=f"Task context: {task_request.context}"))
         
-        # 用户任务消息
-        task_message = f"""请帮我完成以下任务：
+        # User task message
+        task_message = f"""Please complete the following task:
 
 {task_request.task_description}
 
-请使用合适的工具完成这个任务，并提供详细的结果。"""
+Use the available tools to accomplish the task and provide clear results (paths, summaries, and any produced artifacts)."""
 
         messages.append(HumanMessage(content=task_message))
         
@@ -229,20 +261,44 @@ Please complete the user's task using the available tools."""
                 for tool_call in message.tool_calls:
                     tool_calls_count += 1
                     
+                    # 限制总工具调用次数不超过10次（包括失败的）
+                    if tool_calls_count > 10:
+                        logger.warning(f"工具调用次数已达到上限(10次)，停止处理后续调用")
+                        break
+                    
                     # 查找对应的工具响应
                     tool_response = ""
+                    tool_status = "success"  # 默认成功
+                    
                     if i + 1 < len(messages):
                         next_message = messages[i + 1]
                         if hasattr(next_message, 'content'):
                             tool_response = next_message.content
+                            
+                            # 检测工具调用是否失败
+                            # LangChain的ToolMessage在工具调用失败时会包含错误信息
+                            if hasattr(next_message, 'type') and next_message.type == 'tool':
+                                # 检查是否包含常见的错误关键词
+                                response_str = str(tool_response).lower()
+                                if any(error_keyword in response_str for error_keyword in [
+                                    'error:', 'exception:', 'failed', 'field required', 
+                                    'validation error', 'missing', 'invalid', 'traceback'
+                                ]):
+                                    tool_status = "error"
                     
-                    execution_steps.append({
-                        "step": tool_calls_count,
-                        "tool_name": tool_call["name"],
-                        "arguments": tool_call["args"],
-                        "result": tool_response,
-                        "status": "success"
-                    })
+                    # 只有成功的工具调用才添加到执行步骤中
+                    if tool_status == "success":
+                        execution_steps.append({
+                            "step": len(execution_steps) + 1,  # 重新编号，只统计成功的步骤
+                            "tool_name": tool_call["name"],
+                            "arguments": tool_call["args"],
+                            "result": tool_response,
+                            "status": "success"
+                        })
+                
+                # 如果达到调用次数上限，跳出外层循环
+                if tool_calls_count > 10:
+                    break
         
         # 获取最终回复
         final_message = messages[-1] if messages else None
@@ -369,15 +425,15 @@ Please complete the user's task using the available tools."""
     def _generate_summary(self, execution_steps: List[Dict], final_result: str) -> str:
         """Generate task execution summary"""
         
-        successful_steps = sum(1 for step in execution_steps if step.get("status") == "success")
-        total_steps = len(execution_steps)
+        # execution_steps 现在只包含成功的步骤
+        total_successful_steps = len(execution_steps)
         
         tool_names = [step.get("tool_name", "unknown") for step in execution_steps]
         
         summary = f"""**Task Execution Summary**
 
 **Execution Status**
-✅ Task completed - {successful_steps}/{total_steps} steps successful
+✅ Task completed - {total_successful_steps} successful steps
 
 **Tools Used**
 Used tools: {' → '.join(tool_names) if tool_names else 'None'}

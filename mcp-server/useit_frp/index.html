@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>我的隧道网页</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            padding: 40px;
+            max-width: 600px;
+            width: 90%;
+            text-align: center;
+        }
+        
+        .header {
+            margin-bottom: 30px;
+        }
+        
+        .header h1 {
+            color: #333;
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .header p {
+            color: #666;
+            font-size: 1.1em;
+        }
+        
+        .content {
+            margin: 30px 0;
+        }
+        
+        .feature-card {
+            background: #f8f9fa;
+            border-radius: 15px;
+            padding: 25px;
+            margin: 20px 0;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
+            transition: transform 0.3s ease;
+        }
+        
+        .feature-card:hover {
+            transform: translateY(-5px);
+        }
+        
+        .feature-card h3 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 1.3em;
+        }
+        
+        .feature-card p {
+            color: #666;
+            line-height: 1.6;
+        }
+        
+        .status {
+            background: #e8f5e8;
+            border: 2px solid #4caf50;
+            border-radius: 10px;
+            padding: 15px;
+            margin: 20px 0;
+        }
+        
+        .status-online {
+            color: #2e7d32;
+            font-weight: bold;
+        }
+        
+        .button {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 50px;
+            font-size: 1.1em;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin: 10px;
+            text-decoration: none;
+            display: inline-block;
+        }
+        
+        .button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
+        }
+        
+        .footer {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #eee;
+            color: #888;
+            font-size: 0.9em;
+        }
+        
+        .emoji {
+            font-size: 1.5em;
+            margin: 0 5px;
+        }
+        
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+        
+        .pulse {
+            animation: pulse 2s infinite;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 欢迎来到我的网站</h1>
+            <p>通过隧道技术发布到公网</p>
+        </div>
+        
+        <div class="status">
+            <div class="status-online">
+                <span class="emoji">🟢</span>
+                网站已成功通过隧道发布到公网！
+            </div>
+        </div>
+        
+        <div class="content">
+            <div class="feature-card">
+                <h3>📡 隧道连接</h3>
+                <p>本网站运行在本地服务器上，通过 frp 隧道技术实现公网访问。任何人都可以通过公网链接访问这个网站。</p>
+            </div>
+            
+            <div class="feature-card">
+                <h3>🔧 技术特性</h3>
+                <p>基于 Python 和 frp 客户端实现的隧道服务，支持 HTTP/HTTPS 协议，自动处理端口映射和公网地址分配。</p>
+            </div>
+            
+            <div class="feature-card">
+                <h3>🌐 实时访问</h3>
+                <p>网站内容实时同步，本地修改后刷新即可看到更新。支持动态内容和静态资源的完整访问。</p>
+            </div>
+        </div>
+        
+        <div>
+            <button class="button pulse" onclick="showTime()">
+                <span class="emoji">⏰</span>
+                显示当前时间
+            </button>
+            
+            <button class="button" onclick="changeBackground()">
+                <span class="emoji">🎨</span>
+                更换背景
+            </button>
+        </div>
+        
+        <div id="time-display" style="margin: 20px 0; font-size: 1.2em; color: #333;"></div>
+        
+        <div class="footer">
+            <p>
+                <span class="emoji">💡</span>
+                这是一个通过隧道技术发布的演示网站
+                <br>
+                <small>访问时间: <span id="visit-time"></span></small>
+            </p>
+        </div>
+    </div>
+
+    <script>
+        // 显示访问时间
+        document.getElementById('visit-time').textContent = new Date().toLocaleString('zh-CN');
+        
+        // 显示当前时间功能
+        function showTime() {
+            const now = new Date();
+            const timeString = now.toLocaleString('zh-CN', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit'
+            });
+            document.getElementById('time-display').innerHTML = `
+                <div style="background: #f0f8ff; padding: 15px; border-radius: 10px; border-left: 4px solid #667eea;">
+                    <strong>当前时间：${timeString}</strong>
+                </div>
+            `;
+        }
+        
+        // 更换背景功能
+        const backgrounds = [
+            'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+            'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
+            'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)',
+            'linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)',
+            'linear-gradient(135deg, #fa709a 0%, #fee140 100%)',
+            'linear-gradient(135deg, #a8edea 0%, #fed6e3 100%)'
+        ];
+        
+        let currentBgIndex = 0;
+        
+        function changeBackground() {
+            currentBgIndex = (currentBgIndex + 1) % backgrounds.length;
+            document.body.style.background = backgrounds[currentBgIndex];
+        }
+        
+        // 页面加载完成后的欢迎消息
+        window.addEventListener('load', function() {
+            setTimeout(() => {
+                alert('🎉 欢迎访问通过隧道发布的网站！\n\n这个网站运行在本地服务器上，但可以通过公网链接访问。');
+            }, 1000);
+        });
+        
+        // 每秒更新访问时间
+        setInterval(() => {
+            document.getElementById('visit-time').textContent = new Date().toLocaleString('zh-CN');
+        }, 1000);
+    </script>
+</body>
+</html>

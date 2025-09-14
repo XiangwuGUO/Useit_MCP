@@ -88,7 +88,7 @@ class StreamingToolCallbackHandler(BaseCallbackHandler):
         # 发送事件到队列
         stream_event = StreamEvent(
             type="tool_start",
-            data=tool_start_event.dict()
+            data=tool_start_event.model_dump()
         )
         
         # 异步发送事件
@@ -148,7 +148,7 @@ class StreamingToolCallbackHandler(BaseCallbackHandler):
         # 发送事件到队列
         stream_event = StreamEvent(
             type="tool_result",
-            data=tool_result_event.dict()
+            data=tool_result_event.model_dump()
         )
         
         # 异步发送事件
@@ -210,7 +210,7 @@ class StreamingToolCallbackHandler(BaseCallbackHandler):
         # 发送事件到队列
         stream_event = StreamEvent(
             type="tool_result",
-            data=tool_result_event.dict()
+            data=tool_result_event.model_dump()
         )
         
         # 异步发送事件

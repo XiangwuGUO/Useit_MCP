@@ -170,7 +170,7 @@ class MCPServer:
             
             # 返回结果内容
             if hasattr(result, 'content') and result.content:
-                return [item.dict() if hasattr(item, 'dict') else item for item in result.content]
+                return [item.model_dump() if hasattr(item, 'model_dump') else (item.dict() if hasattr(item, 'dict') else item) for item in result.content]
             else:
                 return result
                 

@@ -35,5 +35,16 @@ def start_mcp_server(mcp_instance, default_port: int, server_name: str):
     print(f"{server_name} MCP Server starting - Transport: {transport}")
     if transport == "streamable-http":
         print(f"HTTP server will start at http://localhost:{port}/mcp")
-    
+    # 对 FastMCP 显式注入端口（避免默认 8000）
+    if transport == "streamable-http":
+        try:
+            # FastMCP 使用 settings.port 构建 uvicorn.Config
+            # 直接更新以确保监听端口与启动器一致
+            if hasattr(mcp_instance, "settings"):
+                setattr(mcp_instance.settings, "port", int(port))
+                # 确保主机一致
+                if getattr(mcp_instance.settings, "host", None) is None:
+                    setattr(mcp_instance.settings, "host", "127.0.0.1")
+        except Exception:
+            pass
     mcp_instance.run(transport=transport)

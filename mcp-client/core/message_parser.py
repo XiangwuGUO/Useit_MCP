@@ -138,7 +138,7 @@ class AgentMessageParser:
             # 发送事件
             stream_event = StreamEvent(
                 type="tool_start",
-                data=tool_start_event.dict()
+                data=tool_start_event.model_dump()
             )
             
             await self.event_queue.put(stream_event)
@@ -190,7 +190,7 @@ class AgentMessageParser:
             # 发送事件
             stream_event = StreamEvent(
                 type="tool_result",
-                data=tool_result_event.dict()
+                data=tool_result_event.model_dump()
             )
             
             await self.event_queue.put(stream_event)

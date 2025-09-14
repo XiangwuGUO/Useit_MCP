@@ -17,6 +17,7 @@ from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, Tool
 from langchain_core.tools import BaseTool
 
 from .stream_models import StreamEvent, ToolStartEvent, ToolResultEvent
+from .debug_logger import debug_logger
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ class StreamingAgent:
         # 绑定工具到模型！这是关键！
         self.model = model.bind_tools(tools)
         self.tools = {tool.name: tool for tool in tools}
+        self.tools_list = tools  # 保留原始列表用于调试
         self.system_prompt = system_prompt
         
         # Token 使用跟踪
@@ -127,6 +129,12 @@ class StreamingAgent:
                 for tool_call in tool_calls:
                     step_counter += 1
                     
+                    # 限制总工具调用次数不超过10次
+                    if step_counter > 10:
+                        print(f"⚠️ [AGENT] 工具调用次数已达到上限(10次)，停止执行后续调用")
+                        logger.warning(f"工具调用次数已达到上限(10次)，停止处理后续调用")
+                        break
+                    
                     # 发送工具开始事件
                     await self._send_tool_start_event(
                         event_queue, task_id, step_counter, tool_call
@@ -146,6 +154,11 @@ class StreamingAgent:
                         tool_call_id=tool_call['id']
                     )
                     tool_messages.append(tool_message)
+                
+                # 如果达到调用次数上限，结束迭代
+                if step_counter > 10:
+                    print(f"⚠️ [AGENT] 达到最大工具调用次数限制，任务执行结束")
+                    break
                 
                 # 4. 添加工具响应到对话历史
                 conversation.extend(tool_messages)
@@ -220,7 +233,7 @@ class StreamingAgent:
         
         stream_event = StreamEvent(
             type="tool_start",
-            data=tool_start_event.dict()
+            data=tool_start_event.model_dump()
         )
         
         await event_queue.put(stream_event)
@@ -274,7 +287,7 @@ class StreamingAgent:
         
         stream_event = StreamEvent(
             type="tool_result",
-            data=tool_result_event.dict()
+            data=tool_result_event.model_dump()
         )
         
         await event_queue.put(stream_event)
@@ -329,19 +342,45 @@ class StreamingAgent:
             print(f"🔧 [AGENT] 工具对象类型: {type(tool).__name__}")
             print(f"🔧 [AGENT] 工具对象方法: {[m for m in dir(tool) if not m.startswith('_')]}")
             
+            # 记录工具输入（如果调试开启）
+            if debug_logger.debug_enabled:
+                await debug_logger.log_tool_execution(
+                    tool_name=tool_name,
+                    tool_input=arguments,
+                    tool_output=None,  # 暂时为空，稍后更新
+                    success=None  # 暂时为空，稍后更新
+                )
+            
             # 尝试不同的工具调用方法
             try:
                 print(f"🔧 [AGENT] 尝试调用工具，参数: {arguments}")
                 
-                # 🚨 修复参数格式问题 🚨
-                # MCP工具期望包装格式，而不是扁平化参数
+                # 参数格式适配：
+                # 默认传递平级参数；只有当工具 args_schema 明确包含 'req' 字段时，才包装为 {"req": ...}
                 fixed_arguments = arguments
-                if isinstance(arguments, dict) and 'req' not in arguments:
-                    # 如果参数没有被包装在 req 中，需要包装它
-                    fixed_arguments = {"req": arguments}
-                    print(f"🔧 [AGENT] 修正参数格式: {arguments} -> {fixed_arguments}")
+                needs_req_wrapper = False
+                try:
+                    schema = getattr(tool, 'args_schema', None)
+                    if schema is not None and hasattr(schema, 'model_fields'):
+                        needs_req_wrapper = 'req' in getattr(schema, 'model_fields', {})
+                except Exception:
+                    needs_req_wrapper = False
+
+                if isinstance(arguments, dict):
+                    if needs_req_wrapper:
+                        if 'req' not in arguments:
+                            fixed_arguments = {"req": arguments}
+                            print(f"🔧 [AGENT] 为工具 {tool_name} 包装 req 参数: {arguments} -> {fixed_arguments}")
+                        else:
+                            print(f"🔧 [AGENT] 已包含 req，直接使用: {arguments}")
+                    else:
+                        # 工具不需要 req 包装，保持平级
+                        fixed_arguments = arguments
+                        if 'req' in arguments:
+                            print(f"⚠️ [AGENT] 检测到多余的 req，工具 {tool_name} 使用平级参数，建议移除 req")
+                    # 空参数允许（如 get_base 等），不做强制填充
                 else:
-                    print(f"🔧 [AGENT] 参数格式已正确: {arguments}")
+                    print(f"🔧 [AGENT] 非字典参数，原样传递: {arguments}")
                 
                 # 尝试直接调用工具（推荐方式）
                 if hasattr(tool, 'invoke'):
@@ -377,6 +416,15 @@ class StreamingAgent:
             end_time = time.time()
             execution_time = end_time - start_time
             
+            # 记录工具执行成功结果（如果调试开启）
+            if debug_logger.debug_enabled:
+                await debug_logger.log_tool_execution(
+                    tool_name=tool_name,
+                    tool_input=arguments,
+                    tool_output=result,
+                    success=True
+                )
+            
             return {
                 'success': True,
                 'result': result,
@@ -386,6 +434,16 @@ class StreamingAgent:
         except Exception as e:
             logger.error(f"执行工具 {tool_name} 失败: {e}")
             print(f"❌ [AGENT] 工具 {tool_name} 执行失败: {e}")
+            
+            # 记录工具执行失败结果（如果调试开启）
+            if debug_logger.debug_enabled:
+                await debug_logger.log_tool_execution(
+                    tool_name=tool_name,
+                    tool_input=arguments,
+                    tool_output=None,
+                    success=False,
+                    error=str(e)
+                )
             
             return {
                 'success': False,

@@ -1,0 +1,50 @@
+{
+    "gradio_1757061302765_c823": {
+        "share_token": "gradio_1757061302765_c823",
+        "local_port": 8003,
+        "local_host": "127.0.0.1",
+        "public_url": "https://19a7f618c88e7bf612.useit.run",
+        "pid": 144254,
+        "log_file": "/home/ubuntu/workspace/gxw/useit_mcp_new/useit_frp/logs/gradio_1757061302765_c823.log"
+    },
+    "gradio_1757073326962_fd56": {
+        "share_token": "gradio_1757073326962_fd56",
+        "local_port": 8002,
+        "local_host": "127.0.0.1",
+        "public_url": "https://aa4ae1f81e301aff48.useit.run",
+        "pid": 505736,
+        "log_file": "/home/ubuntu/workspace/gxw/useit_mcp_new/useit_frp/logs/gradio_1757073326962_fd56.log"
+    },
+    "gradio_1757073327474_eb15": {
+        "share_token": "gradio_1757073327474_eb15",
+        "local_port": 8003,
+        "local_host": "127.0.0.1",
+        "public_url": "https://5724ce5cc30719e404.useit.run",
+        "pid": 505787,
+        "log_file": "/home/ubuntu/workspace/gxw/useit_mcp_new/useit_frp/logs/gradio_1757073327474_eb15.log"
+    },
+    "gradio_1757073327983_18cc": {
+        "share_token": "gradio_1757073327983_18cc",
+        "local_port": 8005,
+        "local_host": "127.0.0.1",
+        "public_url": "https://d3b8e2ab51c31dcb46.useit.run",
+        "pid": 505798,
+        "log_file": "/home/ubuntu/workspace/gxw/useit_mcp_new/useit_frp/logs/gradio_1757073327983_18cc.log"
+    },
+    "gradio_1757826632656_1e0b": {
+        "share_token": "gradio_1757826632656_1e0b",
+        "local_port": 8002,
+        "local_host": "127.0.0.1",
+        "public_url": "https://96995b5d9064854a09.useit.run",
+        "pid": 1953831,
+        "log_file": "/home/ubuntu/workspace/gxw/useit_mcp_new/useit-mcp/mcp-server/useit_frp/logs/gradio_1757826632656_1e0b.log"
+    },
+    "gradio_1757826633164_0809": {
+        "share_token": "gradio_1757826633164_0809",
+        "local_port": 8003,
+        "local_host": "127.0.0.1",
+        "public_url": "https://22730ec47226083766.useit.run",
+        "pid": 1953844,
+        "log_file": "/home/ubuntu/workspace/gxw/useit_mcp_new/useit-mcp/mcp-server/useit_frp/logs/gradio_1757826633164_0809.log"
+    }
+}

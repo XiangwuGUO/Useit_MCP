@@ -55,11 +55,13 @@ async def lifespan(app: FastAPI):
     
     # 初始化LangChain执行器
     anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
+    debug_enabled = os.getenv("MCP_DEBUG_ENABLED", "false").lower() in ("true", "1", "yes")
+    
     if anthropic_api_key:
         langchain_executor = LangChainMCPExecutor(client_manager, anthropic_api_key)
-        streaming_executor = StreamingLangChainExecutor(client_manager, anthropic_api_key)
+        streaming_executor = StreamingLangChainExecutor(client_manager, anthropic_api_key, debug_enabled=debug_enabled)
         logger.info("✅ LangChain MCP Executor 已初始化")
-        logger.info("✅ Streaming LangChain MCP Executor 已初始化")
+        logger.info(f"✅ Streaming LangChain MCP Executor 已初始化 (调试模式: {'开启' if debug_enabled else '关闭'})")
     else:
         logger.warning("⚠️ 未设置ANTHROPIC_API_KEY，智能任务执行功能将不可用")
     
@@ -487,7 +489,7 @@ async def execute_task(task: TaskRequest):
                 "vm_id": task.vm_id,
                 "session_id": task.session_id,
                 "mcp_server_name": task.mcp_server_name,
-                "result": result.dict(),
+                "result": result.model_dump(),
                 "new_files": result.new_files
             }
         )
@@ -537,7 +539,7 @@ async def smart_call_tool(smart_call: SmartToolCall):
         return APIResponse(
             success=result.success,
             message=f"智能工具调用{'成功' if result.success else '失败'}",
-            data=smart_result.dict()
+            data=smart_result.model_dump()
         )
     except Exception as e:
         logger.error(f"智能工具调用失败: {e}")
@@ -570,7 +572,7 @@ async def execute_task_streaming(task: TaskRequest):
                 sse_message = SSEMessage(
                     id=event.timestamp,
                     event=event.type,
-                    data=json.dumps(event.dict(), ensure_ascii=False)
+                    data=json.dumps(event.model_dump(), ensure_ascii=False)
                 )
                 
                 yield sse_message.to_sse_string()
@@ -592,7 +594,7 @@ async def execute_task_streaming(task: TaskRequest):
             
             sse_message = SSEMessage(
                 event="error",
-                data=json.dumps(error_event.dict(), ensure_ascii=False)
+                data=json.dumps(error_event.model_dump(), ensure_ascii=False)
             )
             
             yield sse_message.to_sse_string()
@@ -625,7 +627,7 @@ async def get_active_tasks():
         success=True,
         message=f"获取到 {len(active_tasks)} 个活跃任务",
         data={
-            "active_tasks": [task.dict() for task in active_tasks.values()],
+            "active_tasks": [task.model_dump() for task in active_tasks.values()],
             "task_count": len(active_tasks)
         }
     )
@@ -653,7 +655,40 @@ async def get_task_status(task_id: str):
     return APIResponse(
         success=True,
         message="任务状态获取成功",
-        data=task_status.dict()
+        data=task_status.model_dump()
+    )
+
+
+@app.get("/debug/session", response_model=APIResponse)
+async def get_debug_session():
+    """获取调试会话信息"""
+    from core.debug_logger import debug_logger
+    
+    session_info = debug_logger.get_session_info()
+    
+    return APIResponse(
+        success=True,
+        message="调试会话信息获取成功",
+        data=session_info or {"enabled": False, "session_dir": None}
+    )
+
+
+@app.post("/debug/toggle", response_model=APIResponse) 
+async def toggle_debug(enabled: bool = True):
+    """切换调试模式"""
+    from core.debug_logger import debug_logger
+    
+    if enabled:
+        debug_logger.enable_debug()
+        message = "调试模式已开启"
+    else:
+        debug_logger.disable_debug()
+        message = "调试模式已关闭"
+    
+    return APIResponse(
+        success=True,
+        message=message,
+        data=debug_logger.get_session_info() or {"enabled": False}
     )
 
 
@@ -715,4 +750,5 @@ def main():
 
 
 if __name__ == "__main__":
+    MCP_DEBUG_ENABLED="true"
     main()

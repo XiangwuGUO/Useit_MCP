@@ -2,16 +2,16 @@
 # Configure custom servers to be launched alongside official ones
 
 custom_servers:
-  # Example custom server with FRP tunnel support
-  - name: example_server
-    module_path: customized_server/example_server.py
-    port: 8005
-    transport: streamable-http
-    description: "Example custom MCP server with echo functionality"
-    # FRP隧道配置
-    enable_tunnel: true          # 启用FRP隧道
-    tunnel_subdomain: "example"  # 自定义子域名（可选）
-    auto_register: true          # 自动注册到MCP客户端
+  # # Example custom server with FRP tunnel support
+  # - name: example_server
+  #   module_path: customized_server/example_server.py
+  #   port: 8005
+  #   transport: streamable-http
+  #   description: "Example custom MCP server with echo functionality"
+  #   # FRP隧道配置
+  #   enable_tunnel: true          # 启用FRP隧道
+  #   tunnel_subdomain: "example"  # 自定义子域名（可选）
+  #   auto_register: true          # 自动注册到MCP客户端
   
   # Template for additional custom servers:
   # - name: my_custom_server
