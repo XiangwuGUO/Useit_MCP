@@ -202,23 +202,23 @@ function Start-Server {
         
         Write-Host "[SUCCESS] Server started successfully (PID: $($pythonProcess.ProcessId))." -ForegroundColor Green
         
-        # 如果启用了FRP模式，等待配置文件生成
+        # If FRP mode is enabled, wait for config file generation
         if ($EnableFrp) {
-            Write-Host "[INFO] FRP模式已启用，等待配置文件生成..." -ForegroundColor Cyan
+            Write-Host "[INFO] FRP mode enabled, waiting for config file generation..." -ForegroundColor Cyan
             Start-Sleep -Seconds 2
             
             $FrpJsonFile = Get-FrpJsonPath -BaseDir $BaseDir
             if (Test-Path $FrpJsonFile) {
-                Write-Host "[SUCCESS] FRP服务器配置文件已生成: $FrpJsonFile" -ForegroundColor Green
-                Write-Host "[INFO] 可使用此文件配置注册到MCP客户端" -ForegroundColor Cyan
+                Write-Host "[SUCCESS] FRP server config file generated: $FrpJsonFile" -ForegroundColor Green
+                Write-Host "[INFO] Use this file to configure MCP client registration" -ForegroundColor Cyan
             } else {
-                Write-Host "[WARN] FRP配置文件尚未生成，稍等片刻..." -ForegroundColor Yellow
+                Write-Host "[WARN] FRP config file not yet generated, please wait..." -ForegroundColor Yellow
                 Start-Sleep -Seconds 3
                 if (Test-Path $FrpJsonFile) {
-                    Write-Host "[SUCCESS] FRP服务器配置文件: $FrpJsonFile" -ForegroundColor Green
-                    Write-Host "[INFO] 可使用此文件配置注册到MCP客户端" -ForegroundColor Cyan
+                    Write-Host "[SUCCESS] FRP server config file: $FrpJsonFile" -ForegroundColor Green
+                    Write-Host "[INFO] Use this file to configure MCP client registration" -ForegroundColor Cyan
                 } else {
-                    Write-Host "[WARN] FRP配置文件未能及时生成，请检查日志" -ForegroundColor Yellow
+                    Write-Host "[WARN] FRP config file generation failed, please check logs" -ForegroundColor Yellow
                 }
             }
         }
