@@ -35,6 +35,8 @@ class StreamingAgent:
         # Token 使用跟踪
         self.total_token_usage = {"claude-sonnet-4-20250514": 0}
         self.step_token_usage = {}  # 每个步骤的token使用
+        self.last_input_tokens = 0  # 跟踪上次的input_tokens以计算增量
+        self.call_counter = 0  # AI调用计数器
         
         print(f"🤖 [AGENT] 流式Agent创建完成，包含 {len(tools)} 个工具")
         print(f"🤖 [AGENT] 工具名称列表: {list(self.tools.keys())}")
@@ -65,45 +67,11 @@ class StreamingAgent:
                 
                 print(f"📝 [AGENT] 模型响应类型: {type(response).__name__}")
                 
-                # 2. 跟踪token使用（如果响应包含usage信息）
-                if hasattr(response, 'usage_metadata') and response.usage_metadata:
-                    usage = response.usage_metadata
-                    input_tokens = usage.get('input_tokens', 0)
-                    output_tokens = usage.get('output_tokens', 0)
-                    total_tokens = input_tokens + output_tokens
-                    
-                    # 记录当前步骤的token使用
-                    self.step_token_usage[step_counter] = {
-                        "model_name": "claude-sonnet-4-20250514",
-                        "input_tokens": input_tokens,
-                        "output_tokens": output_tokens,
-                        "total_tokens": total_tokens
-                    }
-                    
-                    # 累加到总计
-                    self.total_token_usage["claude-sonnet-4-20250514"] += total_tokens
-                    
-                    print(f"🔢 [AGENT] Token使用: input={input_tokens}, output={output_tokens}, total={total_tokens}")
-                elif hasattr(response, 'response_metadata') and response.response_metadata:
-                    # 尝试从response_metadata获取usage信息
-                    usage = response.response_metadata.get('usage', {})
-                    if usage:
-                        input_tokens = usage.get('input_tokens', 0)
-                        output_tokens = usage.get('output_tokens', 0)
-                        total_tokens = input_tokens + output_tokens
-                        
-                        self.step_token_usage[step_counter] = {
-                            "model_name": "claude-sonnet-4-20250514", 
-                            "input_tokens": input_tokens,
-                            "output_tokens": output_tokens,
-                            "total_tokens": total_tokens
-                        }
-                        
-                        self.total_token_usage["claude-sonnet-4-20250514"] += total_tokens
-                        
-                        print(f"🔢 [AGENT] Token使用 (metadata): input={input_tokens}, output={output_tokens}, total={total_tokens}")
-                else:
-                    print(f"⚠️ [AGENT] 无法获取token使用信息")
+                # 2. 跟踪token使用（遵循LangChain标准）
+                self.call_counter += 1
+                token_tracked = self._track_token_usage(response, self.call_counter)
+                if not token_tracked:
+                    print(f"⚠️ [AGENT] 调用 {self.call_counter}: 无法获取token使用信息")
                 
                 # 2. 检查是否有工具调用
                 tool_calls = getattr(response, 'tool_calls', [])
@@ -154,6 +122,8 @@ class StreamingAgent:
                         tool_call_id=tool_call['id']
                     )
                     tool_messages.append(tool_message)
+                    
+                    # 单个工具执行后的conversation状态记录已移除，避免与迭代完成记录重复
                 
                 # 如果达到调用次数上限，结束迭代
                 if step_counter > 10:
@@ -162,6 +132,19 @@ class StreamingAgent:
                 
                 # 4. 添加工具响应到对话历史
                 conversation.extend(tool_messages)
+                
+                # 记录每轮迭代完成后的完整conversation状态
+                if debug_logger.debug_enabled:
+                    await debug_logger.log_conversation_state(
+                        conversation, 
+                        1000 + iteration + 1,  # 使用1000+作为迭代完成的step_number
+                        metadata={
+                            "type": "iteration_complete",
+                            "iteration": iteration + 1,
+                            "tools_executed_in_iteration": len(tool_messages),
+                            "total_conversation_length": len(conversation)
+                        }
+                    )
                 
             except Exception as e:
                 logger.error(f"Agent执行失败: {e}", exc_info=True)
@@ -475,3 +458,97 @@ class StreamingAgent:
     def get_step_token_usage(self, step_number: int) -> Optional[Dict[str, Any]]:
         """获取指定步骤的token使用情况"""
         return self.step_token_usage.get(step_number)
+    
+    def _track_token_usage(self, response, call_number: int) -> bool:
+        """
+        跟踪LLM响应的token使用（遵循LangChain最佳实践）
+        
+        Args:
+            response: LLM响应对象
+            call_number: 调用编号
+            
+        Returns:
+            bool: 是否成功追踪到token使用信息
+        """
+        try:
+            # 方式1: 使用LangChain标准的usage_metadata (推荐)
+            if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                usage = response.usage_metadata
+                input_tokens = usage.get('input_tokens', 0)
+                output_tokens = usage.get('output_tokens', 0)
+                total_tokens = usage.get('total_tokens', input_tokens + output_tokens)
+                
+                # 计算增量input_tokens（新增的部分）
+                incremental_input_tokens = input_tokens - self.last_input_tokens
+                incremental_total_tokens = incremental_input_tokens + output_tokens
+                
+                # 记录当前调用的token使用
+                self.step_token_usage[call_number] = {
+                    "model_name": "claude-sonnet-4-20250514",
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "total_tokens": total_tokens,
+                    "incremental_input_tokens": incremental_input_tokens,
+                    "incremental_total_tokens": incremental_total_tokens,
+                    "call_type": "model_call"
+                }
+                
+                # 累加到总计 - 使用增量计算避免重复计算
+                self.total_token_usage["claude-sonnet-4-20250514"] += incremental_total_tokens
+                
+                # 更新last_input_tokens
+                self.last_input_tokens = input_tokens
+                
+                print(f"🔢 [AGENT] 调用 {call_number} Token使用: input={input_tokens}(+{incremental_input_tokens}), output={output_tokens}, 增量total={incremental_total_tokens}")
+                return True
+                
+            # 方式2: 从response_metadata获取usage信息（备选）
+            elif hasattr(response, 'response_metadata') and response.response_metadata:
+                usage = response.response_metadata.get('usage', {})
+                if usage:
+                    input_tokens = usage.get('input_tokens', 0)
+                    output_tokens = usage.get('output_tokens', 0)
+                    total_tokens = usage.get('total_tokens', input_tokens + output_tokens)
+                    
+                    # 计算增量input_tokens（新增的部分）
+                    incremental_input_tokens = input_tokens - self.last_input_tokens
+                    incremental_total_tokens = incremental_input_tokens + output_tokens
+                    
+                    self.step_token_usage[call_number] = {
+                        "model_name": "claude-sonnet-4-20250514", 
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                        "total_tokens": total_tokens,
+                        "incremental_input_tokens": incremental_input_tokens,
+                        "incremental_total_tokens": incremental_total_tokens,
+                        "call_type": "model_call"
+                    }
+                    
+                    # 累加到总计 - 使用增量计算避免重复
+                    self.total_token_usage["claude-sonnet-4-20250514"] += incremental_total_tokens
+                    
+                    # 更新last_input_tokens
+                    self.last_input_tokens = input_tokens
+                    
+                    print(f"🔢 [AGENT] 调用 {call_number} Token使用 (metadata): input={input_tokens}(+{incremental_input_tokens}), output={output_tokens}, 增量total={incremental_total_tokens}")
+                    return True
+            
+            return False
+            
+        except Exception as e:
+            print(f"❌ [AGENT] Token追踪失败: {e}")
+            return False
+    
+    def _get_tool_name_from_call(self, tool_call: Dict) -> str:
+        """从工具调用中获取工具名称"""
+        # 使用与_send_tool_start_event相同的解析逻辑
+        if hasattr(tool_call, 'name'):
+            return tool_call.name
+        elif isinstance(tool_call, dict):
+            if 'function' in tool_call:
+                function = tool_call.get('function', {})
+                return function.get('name', 'unknown_tool')
+            else:
+                return tool_call.get('name', 'unknown_tool')
+        else:
+            return 'unknown_tool'

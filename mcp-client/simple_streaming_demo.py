@@ -450,18 +450,19 @@ def main():
     # 3. 测试流式任务执行
     print("3️⃣ 测试流式任务执行...")
     # task_description = "Create a new Markdown file named 'Flat_White_Tutorial.txt' in the sandbox root containing a concise, step-by-step tutorial on making a Flat White: include sections for Overview, Equipment, Ingredients with measurements (e.g., 18g espresso yielding ~36g in 25–30s; 120–150 ml milk), Steps (dose and tamp, pull double-shot espresso, steam milk to 55–60°C/130–140°F with fine microfoam, pour with a thin stream to integrate crema and finish with a simple heart), Tips (bean choice, grind adjustments, milk texturing cues, cleaning), and Variations (iced flat white, alternative milks)."
-    task_description = '''Create a new Markdown file named 'test.md' and write the string: 'JSON 注册
-文件: mcp-client/register_from_json.py、simple_streaming_demo.py
-步骤: 读取 FRP 生成的 mcp_server_frp.json → 取每个 server 的 url（公网地址）→ 调用 MCP 网关 POST /clients 注册这些 server。
-获取工具
-由执行器在运行时连接到已注册的 MCP 服务器，通过 langchain-mcp-adapters 将 MCP 工具转成 LangChain 工具（StructuredTool）。
-二、Agent 构建与消息流
-执行器
-文件: mcp-client/core/langchain_executor.py（非流式）与 core/streaming_executor.py（流式）
-作用: 负责
-创建/复用包含 MCP 工具的 LangChain Agent
-绑定模型（如 ChatAnthropic）
-在流式模式下，暴露 SSE 事件，实时回传工具步骤与结果' to it'''
+#     task_description = '''Create a new Markdown file named 'test.md' and write the string: 'JSON 注册
+# 文件: mcp-client/register_from_json.py、simple_streaming_demo.py
+# 步骤: 读取 FRP 生成的 mcp_server_frp.json → 取每个 server 的 url（公网地址）→ 调用 MCP 网关 POST /clients 注册这些 server。
+# 获取工具
+# 由执行器在运行时连接到已注册的 MCP 服务器，通过 langchain-mcp-adapters 将 MCP 工具转成 LangChain 工具（StructuredTool）。
+# 二、Agent 构建与消息流
+# 执行器
+# 文件: mcp-client/core/langchain_executor.py（非流式）与 core/streaming_executor.py（流式）
+# 作用: 负责
+# 创建/复用包含 MCP 工具的 LangChain Agent
+# 绑定模型（如 ChatAnthropic）
+# 在流式模式下，暴露 SSE 事件，实时回传工具步骤与结果' to it'''
+    task_description = "read the Receipt pdf files and get the amount paid and content for the request"
     streaming_success, streaming_result = call_streaming_task(
         mcp_client_url=mcp_client_url,
         vm_id=vm_id,
@@ -469,7 +470,8 @@ def main():
         mcp_server_name="filesystem",
         task_description=task_description
     )
-    print()
+    print("##### 最终结果 #########")
+    print(streaming_result)
     
     # 4. 测试路径列表功能（直接调用，不通过AI）
     print("4️⃣ 测试获取路径列表功能（直接工具调用）...")

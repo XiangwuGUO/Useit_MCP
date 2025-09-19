@@ -59,6 +59,8 @@ echo ""
 
 # 设置PYTHONPATH并直接运行server.py
 export PYTHONPATH="$SCRIPT_DIR:$PYTHONPATH"
+export MCP_DEBUG_ENABLED=true
+echo "🐛 调试模式已启用"
 python server.py
 
 echo ""

@@ -563,7 +563,8 @@ def write_file(
             operation_type = OperationType.UPDATE
             message = f"成功追加内容到文件 '{req.path}'"
         else:
-            p.write_file(req.content, encoding=req.encoding)
+            with p.open("w", encoding=req.encoding) as f:
+                f.write(req.content)
             operation_type = OperationType.CREATE if is_new_file else OperationType.UPDATE
             message = f"成功{'创建' if is_new_file else '更新'}文件 '{req.path}'"
         

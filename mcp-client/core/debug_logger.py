@@ -141,6 +141,35 @@ class DebugLogger:
         except Exception as e:
             print(f"❌ [DEBUG] 记录工具执行失败: {e}")
     
+    async def log_conversation_state(self, conversation: List[Any], step_number: int, metadata: Dict[str, Any] = None):
+        """记录每一步完成后的conversation状态"""
+        if not self.debug_enabled or not self.current_session_dir:
+            return
+        
+        try:
+            # 构建conversation状态数据
+            conversation_data = {
+                "timestamp": datetime.now().isoformat(),
+                "type": "conversation_state",
+                "call_number": self.call_counter,
+                "step_number": step_number,
+                "conversation": self._serialize_messages(conversation),
+                "conversation_length": len(conversation),
+                "metadata": metadata or {}
+            }
+            
+            # 写入文件
+            filename = f"{self.call_counter:03d}_conversation_step_{step_number:02d}.json"
+            file_path = self.current_session_dir / filename
+            
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(conversation_data, f, ensure_ascii=False, indent=2)
+            
+            print(f"💬 [DEBUG] 记录conversation状态: {filename} (消息数: {len(conversation)})")
+            
+        except Exception as e:
+            print(f"❌ [DEBUG] 记录conversation状态失败: {e}")
+    
     def _serialize_messages(self, messages: List[Any]) -> List[Dict[str, Any]]:
         """序列化消息列表"""
         serialized = []
@@ -149,10 +178,25 @@ class DebugLogger:
             try:
                 if hasattr(msg, 'type') and hasattr(msg, 'content'):
                     # LangChain消息对象
-                    serialized.append({
+                    msg_dict = {
                         "type": msg.type,
                         "content": str(msg.content)
-                    })
+                    }
+                    
+                    # 处理其他可能的属性
+                    if hasattr(msg, 'tool_call_id'):
+                        msg_dict["tool_call_id"] = msg.tool_call_id
+                    if hasattr(msg, 'additional_kwargs'):
+                        # 安全地序列化additional_kwargs
+                        try:
+                            json.dumps(msg.additional_kwargs)
+                            msg_dict["additional_kwargs"] = msg.additional_kwargs
+                        except (TypeError, ValueError):
+                            msg_dict["additional_kwargs"] = str(msg.additional_kwargs)
+                    if hasattr(msg, 'name'):
+                        msg_dict["name"] = msg.name
+                        
+                    serialized.append(msg_dict)
                 elif isinstance(msg, dict):
                     serialized.append(msg)
                 else:
@@ -280,7 +324,22 @@ class DebugLogger:
                     "additional_kwargs": getattr(response, 'additional_kwargs', {})
                 }
             elif isinstance(response, dict):
-                return response
+                # 处理包含messages的字典响应
+                serialized_response = {}
+                for key, value in response.items():
+                    if key == 'messages':
+                        # 序列化messages列表
+                        serialized_response[key] = self._serialize_messages(value)
+                    else:
+                        # 其他字段直接复制或转换为字符串
+                        try:
+                            # 尝试JSON序列化测试
+                            json.dumps(value)
+                            serialized_response[key] = value
+                        except (TypeError, ValueError):
+                            # 如果不能序列化，转换为字符串
+                            serialized_response[key] = str(value)
+                return serialized_response
             else:
                 return {"content": str(response)}
         except Exception as e:

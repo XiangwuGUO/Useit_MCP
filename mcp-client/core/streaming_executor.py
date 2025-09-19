@@ -176,6 +176,22 @@ class StreamingLangChainExecutor(LangChainMCPExecutor):
                         "success": result.get('success', False)
                     }
                 )
+                
+                # 记录任务执行完成后的最终conversation状态
+                final_messages = result.get('messages', [])
+                if final_messages:
+                    await debug_logger.log_conversation_state(
+                        final_messages,
+                        9999,  # 使用9999作为最终conversation的step_number
+                        metadata={
+                            "type": "task_complete",
+                            "task_id": task_id,
+                            "execution_time": end_time - start_time,
+                            "total_steps": result.get('total_steps', 0),
+                            "total_iterations": result.get('iterations', 0),
+                            "final_conversation_length": len(final_messages)
+                        }
+                    )
             
             # 4. 处理结果并发送完成事件
             task_result = await self._process_streaming_result(
