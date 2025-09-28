@@ -8,7 +8,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory=$true, Position=0)]
-    [ValidateSet('start', 'start-frp', 'stop', 'restart', 'status', 'logs', 'list', 'single', 'help')]
+    [ValidateSet('start', 'start-frp', 'stop', 'restart', 'status', 'logs', 'list', 'single', 'frp-start', 'frp-stop', 'frp-status', 'help')]
     [string]$Command,
 
     [Parameter(Position=1)]
@@ -28,6 +28,13 @@ $LogDir = Join-Path -Path $ProjectDir -ChildPath "logs"
 $ServerLog = Join-Path -Path $LogDir -ChildPath "mcp_servers.log"
 $PidFile = Join-Path -Path $ProjectDir -ChildPath "mcp_servers.pid"
 $McpServerDir = Join-Path -Path $ProjectDir -ChildPath "mcp-server"
+
+# FRP API Server Configuration
+$FrpPidFile = Join-Path -Path $ProjectDir -ChildPath "frp_api_server.pid"
+$FrpServerDir = Join-Path -Path $McpServerDir -ChildPath "useit_frp"
+$FrpApiPort = 5888
+$FrpServerLog = Join-Path -Path $LogDir -ChildPath "frp_api_server.log"
+
 # Note: FRP JSON file path is now dynamic based on base_dir/.useit/
 # We'll calculate it in functions that need it
 
@@ -64,6 +71,149 @@ function Check-Dependencies {
             exit 1
         }
     }
+
+    # Check FRP-related dependencies
+    $frpModulesCheck = & python -c "import flask" 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[WARN] Missing FRP API server dependencies. Attempting to install..." -ForegroundColor Yellow
+        & python -m pip install flask
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "[ERROR] FRP dependency installation failed. Please run manually: python -m pip install flask" -ForegroundColor Red
+            exit 1
+        }
+    }
+}
+
+function Test-FrpApiServer {
+    try {
+        $response = Invoke-WebRequest -Uri "http://localhost:$FrpApiPort/health" -Method GET -TimeoutSec 5 -ErrorAction SilentlyContinue
+        return $response.StatusCode -eq 200
+    } catch {
+        return $false
+    }
+}
+
+function Get-FrpApiStatus {
+    if (Test-Path $FrpPidFile) {
+        $pid = Get-Content $FrpPidFile
+        if ($pid -and (Get-Process -Id ([int]$pid) -ErrorAction SilentlyContinue)) {
+            if (Test-FrpApiServer) {
+                Write-Host "[INFO] FRP API server is running (PID: $pid, Port: $FrpApiPort)" -ForegroundColor Green
+                return $true
+            } else {
+                Write-Host "[WARN] FRP API server process exists but API is not accessible" -ForegroundColor Yellow
+                return $false
+            }
+        } else {
+            Write-Host "[WARN] FRP PID file exists but process is not running" -ForegroundColor Yellow
+            Remove-Item $FrpPidFile -Force -ErrorAction SilentlyContinue
+            return $false
+        }
+    } else {
+        if (Test-FrpApiServer) {
+            Write-Host "[WARN] FRP API server is running but PID file is missing" -ForegroundColor Yellow
+            return $true
+        } else {
+            Write-Host "[INFO] FRP API server is not running" -ForegroundColor Yellow
+            return $false
+        }
+    }
+}
+
+function Start-FrpApiServer {
+    Write-Host "[INFO] Starting FRP API server..." -ForegroundColor Cyan
+    
+    # Check if FRP server directory exists
+    if (-not (Test-Path $FrpServerDir)) {
+        Write-Host "[ERROR] FRP server directory not found: $FrpServerDir" -ForegroundColor Red
+        return $false
+    }
+    
+    # Check if already running
+    if (Test-FrpApiServer) {
+        Write-Host "[WARN] FRP API server is already running" -ForegroundColor Yellow
+        return $true
+    }
+    
+    # Check if api_server.py exists
+    $apiServerPath = Join-Path -Path $FrpServerDir -ChildPath "api_server.py"
+    if (-not (Test-Path $apiServerPath)) {
+        Write-Host "[ERROR] FRP API server file not found: $apiServerPath" -ForegroundColor Red
+        return $false
+    }
+    
+    try {
+        # Ensure log directory exists
+        if (-not (Test-Path $LogDir)) { 
+            New-Item -Path $LogDir -ItemType Directory -Force | Out-Null 
+        }
+        
+        Write-Host "[INFO] Starting FRP API server (Port: $FrpApiPort)" -ForegroundColor Cyan
+        
+        # Set UTF-8 encoding for Python
+        $env:PYTHONUTF8 = 1
+        
+        # Start FRP API server in background
+        $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+        $startInfo.FileName = "python.exe"
+        $startInfo.Arguments = "api_server.py"
+        $startInfo.WorkingDirectory = $FrpServerDir
+        $startInfo.UseShellExecute = $false
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        $startInfo.CreateNoWindow = $true
+        
+        $process = [System.Diagnostics.Process]::Start($startInfo)
+        
+        # Save PID
+        $process.Id | Out-File -FilePath $FrpPidFile -Encoding ascii
+        
+        # Wait for startup
+        Start-Sleep -Seconds 3
+        
+        # Check if successfully started
+        if ($process -and -not $process.HasExited -and (Test-FrpApiServer)) {
+            Write-Host "[SUCCESS] FRP API server started successfully (PID: $($process.Id))" -ForegroundColor Green
+            Write-Host "[INFO] API address: http://localhost:$FrpApiPort" -ForegroundColor Cyan
+            return $true
+        } else {
+            Write-Host "[ERROR] FRP API server failed to start" -ForegroundColor Red
+            Write-Host "[INFO] Check logs: $FrpServerLog" -ForegroundColor Yellow
+            Remove-Item $FrpPidFile -Force -ErrorAction SilentlyContinue
+            return $false
+        }
+    } catch {
+        Write-Host "[ERROR] Failed to start FRP API server: $($_.Exception.Message)" -ForegroundColor Red
+        Remove-Item $FrpPidFile -Force -ErrorAction SilentlyContinue
+        return $false
+    }
+}
+
+function Stop-FrpApiServer {
+    Write-Host "[INFO] Stopping FRP API server..." -ForegroundColor Cyan
+    
+    if (Test-Path $FrpPidFile) {
+        $pid = Get-Content $FrpPidFile
+        $process = Get-Process -Id ([int]$pid) -ErrorAction SilentlyContinue
+        if ($process) {
+            Write-Host "[INFO] Sending termination signal to FRP API server process $pid" -ForegroundColor Cyan
+            $process.CloseMainWindow()
+            Start-Sleep -Seconds 2
+            
+            if (-not $process.HasExited) {
+                Write-Host "[WARN] FRP process did not exit gracefully, forcing termination" -ForegroundColor Yellow
+                $process.Kill()
+                Start-Sleep -Seconds 1
+            }
+            
+            Write-Host "[SUCCESS] FRP API server stopped" -ForegroundColor Green
+        } else {
+            Write-Host "[WARN] FRP process not found" -ForegroundColor Yellow
+        }
+        Remove-Item $FrpPidFile -Force -ErrorAction SilentlyContinue
+    } else {
+        Write-Host "[WARN] FRP API server is not running" -ForegroundColor Yellow
+    }
 }
 
 function Get-ServerStatus {
@@ -98,6 +248,10 @@ function Get-ServerStatus {
         & python simple_launcher.py --status 2>$null
         Pop-Location
         
+        # Display FRP API server status
+        Write-Host ""
+        Get-FrpApiStatus | Out-Null
+        
         # Check for FRP configuration file in the new location
         $FrpJsonFile = Get-FrpJsonPath -BaseDir $BaseDir
         if (Test-Path $FrpJsonFile) {
@@ -128,6 +282,9 @@ function Stop-Server {
         Write-Host "[INFO] Server stopped successfully." -ForegroundColor Green
     }
     if (Test-Path $PidFile) { Remove-Item $PidFile -Force }
+    
+    # Stop FRP API server
+    Stop-FrpApiServer
     
     # Clean up FRP configuration files (both new and old locations)
     $NewFrpJsonFile = Get-FrpJsonPath -BaseDir $BaseDir
@@ -166,6 +323,13 @@ function Start-Server {
 
     if ($EnableFrp) {
         Write-Host "[INFO] Enabling FRP reverse proxy mode." -ForegroundColor Cyan
+        
+        # Start FRP API server first
+        if (-not (Start-FrpApiServer)) {
+            Write-Host "[ERROR] FRP API server failed to start, cannot enable FRP mode" -ForegroundColor Red
+            return
+        }
+        
         $argList += "--enable-frp"
         if ($VmId) { $argList += "--vm-id", $VmId; Write-Host "[INFO] VM ID: $VmId" }
         if ($SessionId) { $argList += "--session-id", $SessionId; Write-Host "[INFO] Session ID: $SessionId" }
@@ -282,6 +446,15 @@ switch ($Command) {
         $singleArgs = @("simple_launcher.py", "--single", $Arg1)
         Push-Location $McpServerDir; & python $singleArgs; Pop-Location
     }
+    "frp-start" {
+        Start-FrpApiServer | Out-Null
+    }
+    "frp-stop" {
+        Stop-FrpApiServer
+    }
+    "frp-status" {
+        Get-FrpApiStatus | Out-Null
+    }
     "help" {
         Write-Host "🚀 Simplified MCP Server Management Tool (PowerShell)" -ForegroundColor Cyan
         Write-Host ""
@@ -296,6 +469,9 @@ switch ($Command) {
         Write-Host "  logs                       Show logs" -ForegroundColor White
         Write-Host "  list                       List available servers" -ForegroundColor White
         Write-Host "  single <name>              Start single server" -ForegroundColor White
+        Write-Host "  frp-start                  Start FRP API server only" -ForegroundColor White
+        Write-Host "  frp-stop                   Stop FRP API server only" -ForegroundColor White
+        Write-Host "  frp-status                 Show FRP API server status" -ForegroundColor White
         Write-Host "  help                       Show this help" -ForegroundColor White
         Write-Host ""
         Write-Host "Examples:" -ForegroundColor Yellow
@@ -303,6 +479,8 @@ switch ($Command) {
         Write-Host "  .\start_mcp_server.ps1 start-frp vm123 sess456       # FRP mode with vm_id and session_id" -ForegroundColor Gray
         Write-Host "  .\start_mcp_server.ps1 start-frp vm123 sess456 C:\temp\workspace  # Specify base directory" -ForegroundColor Gray
         Write-Host "  .\start_mcp_server.ps1 single audio_slicer          # Start single server" -ForegroundColor Gray
+        Write-Host "  .\start_mcp_server.ps1 frp-start                    # Start FRP API server only" -ForegroundColor Gray
+        Write-Host "  .\start_mcp_server.ps1 frp-status                   # Check FRP status" -ForegroundColor Gray
         Write-Host "  .\start_mcp_server.ps1 status                       # Check status" -ForegroundColor Gray
         Write-Host ""
         Write-Host "Note:" -ForegroundColor Yellow
