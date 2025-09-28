@@ -8,7 +8,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory=$true, Position=0)]
-    [ValidateSet('start', 'start-frp', 'stop', 'restart', 'status', 'logs', 'list', 'single', 'frp-start', 'frp-stop', 'frp-status', 'help')]
+    [ValidateSet('start', 'start-frp', 'stop', 'restart', 'status', 'logs', 'list', 'single', 'frp-start', 'frp-stop', 'frp-status', 'kill-all', 'diagnose', 'help')]
     [string]$Command,
 
     [Parameter(Position=1)]
@@ -24,10 +24,29 @@ param(
 # --- Script Configuration ---
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $ProjectDir = $ScriptDir
+
+# Validate script environment
+if (-not $ScriptDir -or -not (Test-Path $ScriptDir)) {
+    Write-Host "[ERROR] Unable to determine script directory. Current location: $PWD" -ForegroundColor Red
+    Write-Host "[ERROR] Script path: $($MyInvocation.MyCommand.Definition)" -ForegroundColor Red
+    exit 1
+}
+
+Write-Host "[INFO] Script directory: $ScriptDir" -ForegroundColor Cyan
+Write-Host "[INFO] Project directory: $ProjectDir" -ForegroundColor Cyan
+
+# Validate project structure
+$McpServerDir = Join-Path -Path $ProjectDir -ChildPath "mcp-server"
+if (-not (Test-Path $McpServerDir)) {
+    Write-Host "[ERROR] MCP server directory not found: $McpServerDir" -ForegroundColor Red
+    Write-Host "[INFO] Available directories in project:" -ForegroundColor Yellow
+    Get-ChildItem -Path $ProjectDir -Directory | ForEach-Object { Write-Host "  - $($_.Name)" -ForegroundColor Gray }
+    exit 1
+}
+
 $LogDir = Join-Path -Path $ProjectDir -ChildPath "logs"
 $ServerLog = Join-Path -Path $LogDir -ChildPath "mcp_servers.log"
 $PidFile = Join-Path -Path $ProjectDir -ChildPath "mcp_servers.pid"
-$McpServerDir = Join-Path -Path $ProjectDir -ChildPath "mcp-server"
 
 # FRP API Server Configuration
 $FrpPidFile = Join-Path -Path $ProjectDir -ChildPath "frp_api_server.pid"
@@ -126,6 +145,13 @@ function Start-FrpApiServer {
     # Check if FRP server directory exists
     if (-not (Test-Path $FrpServerDir)) {
         Write-Host "[ERROR] FRP server directory not found: $FrpServerDir" -ForegroundColor Red
+        Write-Host "[INFO] Expected path: $FrpServerDir" -ForegroundColor Yellow
+        Write-Host "[INFO] Available directories in mcp-server:" -ForegroundColor Yellow
+        if (Test-Path $McpServerDir) {
+            Get-ChildItem -Path $McpServerDir -Directory | ForEach-Object { Write-Host "  - $($_.Name)" -ForegroundColor Gray }
+        } else {
+            Write-Host "  [ERROR] mcp-server directory not found: $McpServerDir" -ForegroundColor Red
+        }
         return $false
     }
     
@@ -214,6 +240,71 @@ function Stop-FrpApiServer {
     } else {
         Write-Host "[WARN] FRP API server is not running" -ForegroundColor Yellow
     }
+}
+
+function Stop-AllMcpProcesses {
+    Write-Host "[INFO] Forcefully stopping all MCP-related processes..." -ForegroundColor Cyan
+    
+    # Kill all python processes running simple_launcher.py
+    $mcpProcesses = Get-CimInstance Win32_Process | Where-Object { 
+        $_.Name -eq "python.exe" -and $_.CommandLine -like "*simple_launcher.py*" 
+    }
+    
+    foreach ($process in $mcpProcesses) {
+        Write-Host "[INFO] Killing MCP process: PID $($process.ProcessId)" -ForegroundColor Yellow
+        try {
+            & taskkill /PID $process.ProcessId /F /T 2>$null
+            Start-Sleep -Seconds 1
+        } catch {
+            Write-Host "[WARN] Failed to kill process $($process.ProcessId)" -ForegroundColor Yellow
+        }
+    }
+    
+    # Kill all python processes running api_server.py (FRP)
+    $frpProcesses = Get-CimInstance Win32_Process | Where-Object { 
+        $_.Name -eq "python.exe" -and $_.CommandLine -like "*api_server.py*" 
+    }
+    
+    foreach ($process in $frpProcesses) {
+        Write-Host "[INFO] Killing FRP API process: PID $($process.ProcessId)" -ForegroundColor Yellow
+        try {
+            & taskkill /PID $process.ProcessId /F /T 2>$null
+            Start-Sleep -Seconds 1
+        } catch {
+            Write-Host "[WARN] Failed to kill FRP process $($process.ProcessId)" -ForegroundColor Yellow
+        }
+    }
+    
+    # Kill any processes using MCP ports (8002, 8003, 5888)
+    $ports = @(8002, 8003, 5888)
+    foreach ($port in $ports) {
+        try {
+            $netstatOutput = & netstat -ano | Select-String ":$port "
+            if ($netstatOutput) {
+                foreach ($line in $netstatOutput) {
+                    $pid = ($line -split '\s+')[-1]
+                    if ($pid -match '^\d+$') {
+                        Write-Host "[INFO] Killing process using port ${port}: PID $pid" -ForegroundColor Yellow
+                        & taskkill /PID $pid /F 2>$null
+                    }
+                }
+            }
+        } catch {
+            # Ignore errors for port checking
+        }
+    }
+    
+    # Clean up PID files
+    if (Test-Path $PidFile) { 
+        Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
+        Write-Host "[INFO] Cleaned up MCP PID file" -ForegroundColor Cyan
+    }
+    if (Test-Path $FrpPidFile) { 
+        Remove-Item $FrpPidFile -Force -ErrorAction SilentlyContinue
+        Write-Host "[INFO] Cleaned up FRP PID file" -ForegroundColor Cyan
+    }
+    
+    Write-Host "[SUCCESS] All MCP processes forcefully stopped" -ForegroundColor Green
 }
 
 function Get-ServerStatus {
@@ -310,11 +401,11 @@ function Start-Server {
     )
 
     Write-Host "[INFO] Starting MCP servers..." -ForegroundColor Cyan
-    if (Get-ServerStatus -BaseDir $BaseDir) {
-        Write-Host "[WARN] Server is already running. Stopping it first..." -ForegroundColor Yellow
-        Stop-Server -BaseDir $BaseDir
-        Start-Sleep -Seconds 2
-    }
+    
+    # Force kill all existing MCP processes before starting
+    Write-Host "[INFO] Ensuring no existing MCP processes are running..." -ForegroundColor Cyan
+    Stop-AllMcpProcesses
+    Start-Sleep -Seconds 3
 
     Check-Dependencies
 
@@ -455,6 +546,9 @@ switch ($Command) {
     "frp-status" {
         Get-FrpApiStatus | Out-Null
     }
+    "kill-all" {
+        Stop-AllMcpProcesses
+    }
     "help" {
         Write-Host "🚀 Simplified MCP Server Management Tool (PowerShell)" -ForegroundColor Cyan
         Write-Host ""
@@ -472,6 +566,7 @@ switch ($Command) {
         Write-Host "  frp-start                  Start FRP API server only" -ForegroundColor White
         Write-Host "  frp-stop                   Stop FRP API server only" -ForegroundColor White
         Write-Host "  frp-status                 Show FRP API server status" -ForegroundColor White
+        Write-Host "  kill-all                   Force kill all MCP processes" -ForegroundColor White
         Write-Host "  help                       Show this help" -ForegroundColor White
         Write-Host ""
         Write-Host "Examples:" -ForegroundColor Yellow

@@ -48,6 +48,7 @@ show_help() {
     echo "  frp-start     单独启动FRP API服务器"
     echo "  frp-stop      单独停止FRP API服务器"
     echo "  frp-status    查看FRP API服务器状态"
+    echo "  kill-all      强制杀死所有MCP相关进程"
     echo ""
     echo "选项:"
     echo "  --no-custom   跳过自定义服务器"
@@ -204,6 +205,75 @@ stop_frp_api_server() {
     fi
 }
 
+# 强制停止所有MCP相关进程
+stop_all_mcp_processes() {
+    echo -e "${BLUE}🔥 强制停止所有MCP相关进程...${NC}"
+    
+    # 杀死所有运行simple_launcher.py的Python进程
+    local mcp_pids=$(ps aux | grep "python.*simple_launcher.py" | grep -v grep | awk '{print $2}')
+    if [ -n "$mcp_pids" ]; then
+        echo -e "${YELLOW}⚠️ 发现MCP进程，正在终止...${NC}"
+        for pid in $mcp_pids; do
+            echo -e "${BLUE}📤 终止MCP进程: PID $pid${NC}"
+            kill -TERM "$pid" 2>/dev/null || true
+            sleep 1
+            # 如果进程仍然存在，强制杀死
+            if ps -p "$pid" > /dev/null 2>&1; then
+                echo -e "${YELLOW}🔨 强制终止MCP进程: PID $pid${NC}"
+                kill -KILL "$pid" 2>/dev/null || true
+            fi
+        done
+    fi
+    
+    # 杀死所有运行api_server.py的Python进程 (FRP)
+    local frp_pids=$(ps aux | grep "python.*api_server.py" | grep -v grep | awk '{print $2}')
+    if [ -n "$frp_pids" ]; then
+        echo -e "${YELLOW}⚠️ 发现FRP API进程，正在终止...${NC}"
+        for pid in $frp_pids; do
+            echo -e "${BLUE}📤 终止FRP API进程: PID $pid${NC}"
+            kill -TERM "$pid" 2>/dev/null || true
+            sleep 1
+            # 如果进程仍然存在，强制杀死
+            if ps -p "$pid" > /dev/null 2>&1; then
+                echo -e "${YELLOW}🔨 强制终止FRP API进程: PID $pid${NC}"
+                kill -KILL "$pid" 2>/dev/null || true
+            fi
+        done
+    fi
+    
+    # 杀死占用MCP端口的进程 (8002, 8003, 5888)
+    local ports=(8002 8003 5888)
+    for port in "${ports[@]}"; do
+        local port_pids=$(lsof -t -i:$port 2>/dev/null || true)
+        if [ -n "$port_pids" ]; then
+            echo -e "${YELLOW}⚠️ 发现占用端口 $port 的进程，正在终止...${NC}"
+            for pid in $port_pids; do
+                echo -e "${BLUE}📤 终止占用端口 $port 的进程: PID $pid${NC}"
+                kill -TERM "$pid" 2>/dev/null || true
+                sleep 1
+                # 如果进程仍然存在，强制杀死
+                if ps -p "$pid" > /dev/null 2>&1; then
+                    echo -e "${YELLOW}🔨 强制终止进程: PID $pid${NC}"
+                    kill -KILL "$pid" 2>/dev/null || true
+                fi
+            done
+        fi
+    done
+    
+    # 清理PID文件
+    if [ -f "$PID_FILE" ]; then
+        echo -e "${BLUE}🧹 清理MCP PID文件${NC}"
+        rm -f "$PID_FILE"
+    fi
+    if [ -f "$FRP_PID_FILE" ]; then
+        echo -e "${BLUE}🧹 清理FRP PID文件${NC}"
+        rm -f "$FRP_PID_FILE"
+    fi
+    
+    echo -e "${GREEN}✅ 所有MCP相关进程已强制停止${NC}"
+    sleep 1
+}
+
 # 获取服务器状态
 get_status() {
     if [ -f "$PID_FILE" ]; then
@@ -254,12 +324,10 @@ start_servers() {
     echo -e "${BLUE}🚀 启动MCP服务器...${NC}"
     echo -e "${BLUE}📁 项目目录: $PROJECT_DIR${NC}"
     
-    # 检查是否已经运行，如果是则先停止
-    if [ -f "$PID_FILE" ] && ps -p "$(cat "$PID_FILE")" > /dev/null 2>&1; then
-        echo -e "${YELLOW}⚠️ 服务器已在运行，正在停止...${NC}"
-        stop_servers
-        sleep 2
-    fi
+    # 强制清理所有现有MCP进程
+    echo -e "${BLUE}🔍 确保没有现有MCP进程运行...${NC}"
+    stop_all_mcp_processes
+    sleep 2
     
     # 检查依赖
     check_dependencies
@@ -534,6 +602,9 @@ main() {
             ;;
         frp-status)
             get_frp_status
+            ;;
+        kill-all)
+            stop_all_mcp_processes
             ;;
         help|--help|-h)
             show_help
