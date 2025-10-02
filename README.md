@@ -32,10 +32,10 @@ useit-mcp/
 
 ## 🚀 快速开始
 
-### 1. 启动MCP网关
+### 1. 安装server环境
 ```bash
-cd mcp-client && python server.py
-# 网关运行在 http://localhost:8080
+cd mcp-server
+pip install -r requirements.txt
 ```
 
 ### 2. 启动MCP服务器

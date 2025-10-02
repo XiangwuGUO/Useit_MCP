@@ -45,10 +45,8 @@ SERVER_PORT = 8002
 
 # 创建MCP服务器
 mcp = FastMCP(
-    SERVER_NAME,
-    title="标准化音频切片服务", 
-    description="基于节拍检测的音频文件切片服务，使用标准化MCP响应格式",
-    port=SERVER_PORT
+    name=SERVER_NAME,
+    instructions="基于节拍检测的音频文件切片服务，使用标准化MCP响应格式"
 )
 
 # 创建处理工具实例

@@ -22,10 +22,8 @@ class EchoRequest(BaseModel):
 
 
 mcp = FastMCP(
-    "ExampleServer",
-    title="Example Custom MCP Server",
-    description="A simple example server that echoes messages",
-    port=8005  # Will be auto-assigned by launcher
+    name="ExampleServer",
+    instructions="A simple example server that echoes messages"
 )
 
 

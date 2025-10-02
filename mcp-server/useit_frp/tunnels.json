@@ -62,5 +62,21 @@
         "public_url": "https://ae2f712f59bb592a06.useit.run",
         "pid": 1202164,
         "log_file": "/home/ubuntu/workspace/gxw/useit_mcp_new/useit-mcp/mcp-server/useit_frp/logs/gradio_1758287925282_a401.log"
+    },
+    "gradio_1759435093874_2470": {
+        "share_token": "gradio_1759435093874_2470",
+        "local_port": 8002,
+        "local_host": "127.0.0.1",
+        "public_url": "https://58374a829db208b22b.useit.run",
+        "pid": 2705194,
+        "log_file": "/home/ubuntu/workspace/gxw/useit_mcp_new/useit-mcp/mcp-server/useit_frp/logs/gradio_1759435093874_2470.log"
+    },
+    "gradio_1759435094383_a129": {
+        "share_token": "gradio_1759435094383_a129",
+        "local_port": 8003,
+        "local_host": "127.0.0.1",
+        "public_url": "https://d20801c231e18b7d4d.useit.run",
+        "pid": 2705276,
+        "log_file": "/home/ubuntu/workspace/gxw/useit_mcp_new/useit-mcp/mcp-server/useit_frp/logs/gradio_1759435094383_a129.log"
     }
 }

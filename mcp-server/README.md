@@ -57,7 +57,7 @@ custom_servers:
 ```python
 from mcp.server.fastmcp import FastMCP
 
-mcp = FastMCP("MyServer", port=8006)
+mcp = FastMCP(name="MyServer")
 
 @mcp.tool()
 def my_tool(param: str) -> str:
