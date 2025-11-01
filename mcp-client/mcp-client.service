@@ -1,0 +1,44 @@
+[Unit]
+Description=MCP Client Gateway Service
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/workspace/gxw/Useit_MCP/mcp-client
+
+# 环境变量设置
+Environment="PATH=/home/ubuntu/miniconda3/envs/dify/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="PYTHONPATH=/home/ubuntu/workspace/gxw/Useit_MCP/mcp-client"
+Environment="MCP_DEBUG_ENABLED=true"
+EnvironmentFile=-/home/ubuntu/workspace/gxw/Useit_MCP/mcp-client/.env
+
+# Gunicorn 启动命令
+# 使用 --capture-output 让所有日志都通过 gunicorn 的日志系统
+ExecStart=/home/ubuntu/miniconda3/envs/dify/bin/gunicorn server:app \
+    --workers 1 \
+    --worker-class uvicorn.workers.UvicornWorker \
+    --bind 0.0.0.0:8080 \
+    --access-logfile /home/ubuntu/workspace/gxw/Useit_MCP/mcp-client/access.log \
+    --error-logfile /home/ubuntu/workspace/gxw/Useit_MCP/mcp-client/error.log \
+    --log-level info \
+    --timeout 120 \
+    --graceful-timeout 30 \
+    --keep-alive 5 \
+    --capture-output
+
+# 重启策略
+Restart=always
+RestartSec=10
+StartLimitBurst=5
+StartLimitInterval=300
+
+# 进程管理
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+
