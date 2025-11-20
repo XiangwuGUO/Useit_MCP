@@ -120,22 +120,31 @@ class ServerConfigs:
         description="提供音频文件切片和处理功能",
         port=8002
     )
-    
+
+    EXCEL = MCPServerConfig(
+        server_name="excel",
+        title="Excel控制服务",
+        description="基于COM的Excel自动化操作服务，支持工作簿、工作表、单元格的创建、修改、删除和公式操作",
+        port=8004
+    )
+
     @classmethod
     def get_config(cls, server_name: str) -> Optional[MCPServerConfig]:
         """根据服务器名称获取配置"""
         configs = {
             "filesystem": cls.FILESYSTEM,
-            "audio_slicer": cls.AUDIO_SLICER
+            "audio_slicer": cls.AUDIO_SLICER,
+            "excel": cls.EXCEL
         }
         return configs.get(server_name)
-    
+
     @classmethod
     def list_configs(cls) -> Dict[str, MCPServerConfig]:
         """列出所有配置"""
         return {
             "filesystem": cls.FILESYSTEM,
-            "audio_slicer": cls.AUDIO_SLICER
+            "audio_slicer": cls.AUDIO_SLICER,
+            "excel": cls.EXCEL
         }
 
 

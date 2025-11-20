@@ -1,5 +1,6 @@
-mcp_ai_input
-
+mcp-server\official_server\excel_executor\config\api_keys.json
+mcp-server\official_server\word_executor\config\api_keys.json
+api_keys.json
 # Python
 __pycache__/
 *.py[cod]

@@ -1376,19 +1376,26 @@ if __name__ == "__main__":
     # 保持兼容性，使用原有启动方式
     import sys
     import os
+
+    # 设置UTF-8编码以支持Windows
+    if sys.platform == 'win32':
+        import io
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+
     sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
     from server_base import start_mcp_server
-    
+
     # 添加自定义HTTP端点 - 正确的异步版本
     @mcp.custom_route("/direct/list-all-paths", ["GET"])
     async def http_list_all_paths(request):
         """HTTP端点：获取所有路径列表 - 专用于直接调用"""
         from fastapi.responses import JSONResponse
-        
+
         try:
             # 调用完整的list_all_paths函数
             result = list_all_paths()
-            
+
             # 简化返回格式，只返回必要的字段以确保兼容性
             if isinstance(result, dict) and result.get('status') == 'success':
                 response_data = {
@@ -1402,9 +1409,9 @@ if __name__ == "__main__":
                     "data": {},
                     "message": "获取路径列表失败"
                 }
-                
+
             return JSONResponse(content=response_data)
-            
+
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -1415,11 +1422,14 @@ if __name__ == "__main__":
                 "message": f"获取路径列表失败: {str(e)}"
             }
             return JSONResponse(content=error_response, status_code=500)
-    
-    print(f"🚀 启动标准化文件系统服务器")
-    print(f"📁 基础目录: {BASE_DIR}")
-    print(f"🌐 端口: 8003")
-    print(f"📋 使用标准响应格式")
-    print(f"🔗 HTTP端点: /direct/list-all-paths (专用于直接调用)")
-    
+
+    print("=" * 60)
+    print("Filesystem MCP Server - 启动中")
+    print("=" * 60)
+    print(f"基础目录: {BASE_DIR}")
+    print(f"监听端口: 8003")
+    print(f"响应格式: 标准化MCP格式")
+    print(f"HTTP端点: /direct/list-all-paths (专用于直接调用)")
+    print("=" * 60)
+
     start_mcp_server(mcp, 8003, "filesystem")

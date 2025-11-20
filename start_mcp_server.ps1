@@ -114,10 +114,10 @@ function Test-FrpApiServer {
 
 function Get-FrpApiStatus {
     if (Test-Path $FrpPidFile) {
-        $pid = Get-Content $FrpPidFile
-        if ($pid -and (Get-Process -Id ([int]$pid) -ErrorAction SilentlyContinue)) {
+        $frpPid = Get-Content $FrpPidFile
+        if ($frpPid -and (Get-Process -Id ([int]$frpPid) -ErrorAction SilentlyContinue)) {
             if (Test-FrpApiServer) {
-                Write-Host "[INFO] FRP API server is running (PID: $pid, Port: $FrpApiPort)" -ForegroundColor Green
+                Write-Host "[INFO] FRP API server is running (PID: $frpPid, Port: $FrpApiPort)" -ForegroundColor Green
                 return $true
             } else {
                 Write-Host "[WARN] FRP API server process exists but API is not accessible" -ForegroundColor Yellow
@@ -217,21 +217,21 @@ function Start-FrpApiServer {
 
 function Stop-FrpApiServer {
     Write-Host "[INFO] Stopping FRP API server..." -ForegroundColor Cyan
-    
+
     if (Test-Path $FrpPidFile) {
-        $pid = Get-Content $FrpPidFile
-        $process = Get-Process -Id ([int]$pid) -ErrorAction SilentlyContinue
+        $frpPid = Get-Content $FrpPidFile
+        $process = Get-Process -Id ([int]$frpPid) -ErrorAction SilentlyContinue
         if ($process) {
-            Write-Host "[INFO] Sending termination signal to FRP API server process $pid" -ForegroundColor Cyan
+            Write-Host "[INFO] Sending termination signal to FRP API server process $frpPid" -ForegroundColor Cyan
             $process.CloseMainWindow()
             Start-Sleep -Seconds 2
-            
+
             if (-not $process.HasExited) {
                 Write-Host "[WARN] FRP process did not exit gracefully, forcing termination" -ForegroundColor Yellow
                 $process.Kill()
                 Start-Sleep -Seconds 1
             }
-            
+
             Write-Host "[SUCCESS] FRP API server stopped" -ForegroundColor Green
         } else {
             Write-Host "[WARN] FRP process not found" -ForegroundColor Yellow
@@ -275,17 +275,17 @@ function Stop-AllMcpProcesses {
         }
     }
     
-    # Kill any processes using MCP ports (8002, 8003, 5888)
-    $ports = @(8002, 8003, 5888)
+    # Kill any processes using MCP ports (8002, 8003, 8004, 5888)
+    $ports = @(8002, 8003, 8004, 5888)
     foreach ($port in $ports) {
         try {
             $netstatOutput = & netstat -ano | Select-String ":$port "
             if ($netstatOutput) {
                 foreach ($line in $netstatOutput) {
-                    $pid = ($line -split '\s+')[-1]
-                    if ($pid -match '^\d+$') {
-                        Write-Host "[INFO] Killing process using port ${port}: PID $pid" -ForegroundColor Yellow
-                        & taskkill /PID $pid /F 2>$null
+                    $portPid = ($line -split '\s+')[-1]
+                    if ($portPid -match '^\d+$') {
+                        Write-Host "[INFO] Killing process using port ${port}: PID $portPid" -ForegroundColor Yellow
+                        & taskkill /PID $portPid /F 2>$null
                     }
                 }
             }

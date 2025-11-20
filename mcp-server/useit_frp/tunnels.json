@@ -78,5 +78,77 @@
         "public_url": "https://d20801c231e18b7d4d.useit.run",
         "pid": 2705276,
         "log_file": "/home/ubuntu/workspace/gxw/useit_mcp_new/useit-mcp/mcp-server/useit_frp/logs/gradio_1759435094383_a129.log"
+    },
+    "gradio_1763344001257_22b2": {
+        "share_token": "gradio_1763344001257_22b2",
+        "local_port": 8002,
+        "local_host": "127.0.0.1",
+        "public_url": "https://eb205c07813c7c9c1f.useit.run",
+        "pid": 121740,
+        "log_file": "D:\\develop\\New_Start\\Excel\\Useit_MCP\\mcp-server\\useit_frp\\logs\\gradio_1763344001257_22b2.log"
+    },
+    "gradio_1763344003914_cf9c": {
+        "share_token": "gradio_1763344003914_cf9c",
+        "local_port": 8003,
+        "local_host": "127.0.0.1",
+        "public_url": "https://ce3ea9a79f8d1b572b.useit.run",
+        "pid": 123212,
+        "log_file": "D:\\develop\\New_Start\\Excel\\Useit_MCP\\mcp-server\\useit_frp\\logs\\gradio_1763344003914_cf9c.log"
+    },
+    "gradio_1763344004961_b937": {
+        "share_token": "gradio_1763344004961_b937",
+        "local_port": 8004,
+        "local_host": "127.0.0.1",
+        "public_url": "https://d8a373f761383a1985.useit.run",
+        "pid": 133180,
+        "log_file": "D:\\develop\\New_Start\\Excel\\Useit_MCP\\mcp-server\\useit_frp\\logs\\gradio_1763344004961_b937.log"
+    },
+    "gradio_1763344363913_3155": {
+        "share_token": "gradio_1763344363913_3155",
+        "local_port": 8002,
+        "local_host": "127.0.0.1",
+        "public_url": "https://731936884103278730.useit.run",
+        "pid": 122256,
+        "log_file": "D:\\develop\\New_Start\\Excel\\Useit_MCP\\mcp-server\\useit_frp\\logs\\gradio_1763344363913_3155.log"
+    },
+    "gradio_1763344365253_5328": {
+        "share_token": "gradio_1763344365253_5328",
+        "local_port": 8003,
+        "local_host": "127.0.0.1",
+        "public_url": "https://6882cd82744957c1c3.useit.run",
+        "pid": 131408,
+        "log_file": "D:\\develop\\New_Start\\Excel\\Useit_MCP\\mcp-server\\useit_frp\\logs\\gradio_1763344365253_5328.log"
+    },
+    "gradio_1763344366288_19e0": {
+        "share_token": "gradio_1763344366288_19e0",
+        "local_port": 8004,
+        "local_host": "127.0.0.1",
+        "public_url": "https://6b8b95e9621591241f.useit.run",
+        "pid": 132712,
+        "log_file": "D:\\develop\\New_Start\\Excel\\Useit_MCP\\mcp-server\\useit_frp\\logs\\gradio_1763344366288_19e0.log"
+    },
+    "gradio_1763344550424_8e2c": {
+        "share_token": "gradio_1763344550424_8e2c",
+        "local_port": 8002,
+        "local_host": "127.0.0.1",
+        "public_url": "https://2a175d2bbfbbe8a905.useit.run",
+        "pid": 132104,
+        "log_file": "D:\\develop\\New_Start\\Excel\\Useit_MCP\\mcp-server\\useit_frp\\logs\\gradio_1763344550424_8e2c.log"
+    },
+    "gradio_1763344551466_eeae": {
+        "share_token": "gradio_1763344551466_eeae",
+        "local_port": 8003,
+        "local_host": "127.0.0.1",
+        "public_url": "https://2c225083191f715611.useit.run",
+        "pid": 129404,
+        "log_file": "D:\\develop\\New_Start\\Excel\\Useit_MCP\\mcp-server\\useit_frp\\logs\\gradio_1763344551466_eeae.log"
+    },
+    "gradio_1763344552498_5861": {
+        "share_token": "gradio_1763344552498_5861",
+        "local_port": 8004,
+        "local_host": "127.0.0.1",
+        "public_url": "https://8dfa37f010605ef6fc.useit.run",
+        "pid": 129616,
+        "log_file": "D:\\develop\\New_Start\\Excel\\Useit_MCP\\mcp-server\\useit_frp\\logs\\gradio_1763344552498_5861.log"
     }
 }

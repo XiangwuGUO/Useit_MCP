@@ -1,0 +1,298 @@
+"""
+Excel COM Code Generator MCP Server
+基于代码生成的Excel自动化服务
+"""
+
+import os
+import sys
+from pathlib import Path
+from typing import Dict, Any, Optional
+from mcp.server.fastmcp import FastMCP
+from pydantic import Field
+
+# 添加当前目录到路径
+sys.path.insert(0, os.path.dirname(__file__))
+
+from code_generator import ExcelCodeGenerator
+from executor import CodeExecutor, ExecutionResult
+
+# 创建MCP服务器
+mcp = FastMCP("excel-codegen")
+
+# 获取工作区目录
+def get_workspace_dir() -> Path:
+    """获取工作区目录"""
+    workspace = os.environ.get("EXCEL_WORKSPACE_DIR")
+    if workspace:
+        return Path(workspace).expanduser().resolve()
+    default_path = Path.cwd() / "excel_workspace"
+    default_path.mkdir(parents=True, exist_ok=True)
+    return default_path.resolve()
+
+WORKSPACE_DIR = get_workspace_dir()
+
+# 初始化组件
+code_generator = ExcelCodeGenerator(workspace_dir=WORKSPACE_DIR)
+executor = CodeExecutor(workspace_dir=WORKSPACE_DIR)
+
+
+@mcp.tool()
+def generate_excel_code(
+    requirement: str = Field(..., description="用户需求描述，用自然语言描述想要实现的Excel操作"),
+    language: str = Field("PowerShell", description="生成代码的语言：PowerShell 或 Python"),
+    file_name: Optional[str] = Field(None, description="输出Excel文件名（可选），如：报表.xlsx")
+) -> Dict[str, Any]:
+    """根据用户需求生成Excel COM操作代码
+
+    这是核心工具，AI会理解用户需求并生成完整的可执行代码。
+    生成的代码包含完整的Excel操作流程：创建、操作、保存、清理。
+
+    Args:
+        requirement: 用户的需求描述
+        language: 代码语言（PowerShell或Python）
+        file_name: 输出文件名
+
+    Returns:
+        包含生成代码、说明等信息的响应
+
+    Examples:
+        - generate_excel_code("创建一个包含学生成绩的表格")
+        - generate_excel_code("制作销售数据分析报表，包含图表", file_name="销售报表.xlsx")
+        - generate_excel_code("读取data.csv并创建数据透视表", language="Python")
+    """
+    try:
+        result = code_generator.generate(
+            requirement=requirement,
+            language=language,
+            file_name=file_name
+        )
+
+        return {
+            "success": True,
+            "message": f"成功生成{language}代码",
+            "data": {
+                "code": result["code"],
+                "language": result["language"],
+                "explanation": result["explanation"],
+                "estimated_time": result.get("estimated_time", "未知"),
+                "file_name": result.get("file_name"),
+                "operations": result.get("operations", [])
+            }
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "message": "代码生成失败",
+            "error": str(e)
+        }
+
+
+@mcp.tool()
+def execute_excel_code(
+    code: str = Field(..., description="要执行的PowerShell或Python代码"),
+    language: str = Field("PowerShell", description="代码语言：PowerShell 或 Python"),
+    timeout: int = Field(60, description="执行超时时间（秒）"),
+    save_code: bool = Field(False, description="是否保存代码到文件以供后续复用")
+) -> Dict[str, Any]:
+    """在沙箱环境中执行Excel代码
+
+    安全地执行生成的代码，限制在工作区目录内。
+    支持超时控制和资源限制。
+
+    Args:
+        code: 要执行的代码
+        language: 代码语言
+        timeout: 超时时间
+        save_code: 是否保存代码
+
+    Returns:
+        执行结果，包含输出、错误、生成的文件等
+
+    Examples:
+        - execute_excel_code(code="...", language="PowerShell")
+        - execute_excel_code(code="...", timeout=120, save_code=True)
+    """
+    try:
+        # 执行代码
+        result = executor.execute(
+            code=code,
+            language=language,
+            timeout=timeout
+        )
+
+        # 保存代码（如果需要）
+        if save_code and result.success:
+            code_file = executor.save_code(code, language)
+        else:
+            code_file = None
+
+        return {
+            "success": result.success,
+            "message": "执行完成" if result.success else "执行失败",
+            "data": {
+                "output": result.output,
+                "error": result.error,
+                "generated_files": [str(f) for f in result.generated_files],
+                "execution_time": result.execution_time,
+                "saved_code": str(code_file) if code_file else None
+            }
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "message": "执行失败",
+            "error": str(e)
+        }
+
+
+@mcp.tool()
+def generate_and_execute(
+    requirement: str = Field(..., description="用户需求描述"),
+    language: str = Field("PowerShell", description="代码语言"),
+    file_name: Optional[str] = Field(None, description="输出文件名"),
+    auto_execute: bool = Field(True, description="是否自动执行生成的代码"),
+    save_code: bool = Field(False, description="是否保存代码")
+) -> Dict[str, Any]:
+    """一站式服务：生成并执行代码
+
+    结合代码生成和执行，一步完成用户需求。
+
+    Args:
+        requirement: 用户需求
+        language: 代码语言
+        file_name: 输出文件名
+        auto_execute: 是否自动执行
+        save_code: 是否保存代码
+
+    Returns:
+        包含生成的代码和执行结果
+    """
+    try:
+        # 第一步：生成代码
+        gen_result = generate_excel_code(requirement, language, file_name)
+
+        if not gen_result["success"]:
+            return gen_result
+
+        code = gen_result["data"]["code"]
+
+        # 第二步：执行代码（如果需要）
+        if auto_execute:
+            exec_result = execute_excel_code(code, language, save_code=save_code)
+
+            return {
+                "success": exec_result["success"],
+                "message": "代码生成并执行完成" if exec_result["success"] else "执行失败",
+                "data": {
+                    "generated_code": code,
+                    "explanation": gen_result["data"]["explanation"],
+                    "execution_result": exec_result["data"]
+                }
+            }
+        else:
+            return {
+                "success": True,
+                "message": "代码已生成（未执行）",
+                "data": {
+                    "generated_code": code,
+                    "explanation": gen_result["data"]["explanation"],
+                    "note": "请使用 execute_excel_code 工具执行此代码"
+                }
+            }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "message": "操作失败",
+            "error": str(e)
+        }
+
+
+@mcp.tool()
+def list_generated_files(
+    pattern: str = Field("*.xlsx", description="文件匹配模式，如 *.xlsx, *.xls, *报表*")
+) -> Dict[str, Any]:
+    """列出工作区中生成的Excel文件
+
+    查看已生成的所有Excel文件。
+
+    Args:
+        pattern: 文件匹配模式
+
+    Returns:
+        文件列表及详细信息
+    """
+    try:
+        files = list(WORKSPACE_DIR.glob(pattern))
+
+        file_info = []
+        for f in files:
+            stat = f.stat()
+            file_info.append({
+                "name": f.name,
+                "path": str(f),
+                "size_kb": round(stat.st_size / 1024, 2),
+                "modified": stat.st_mtime
+            })
+
+        return {
+            "success": True,
+            "message": f"找到 {len(files)} 个文件",
+            "data": {
+                "workspace": str(WORKSPACE_DIR),
+                "files": file_info,
+                "count": len(files)
+            }
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "message": "列出文件失败",
+            "error": str(e)
+        }
+
+
+@mcp.tool()
+def get_templates() -> Dict[str, Any]:
+    """获取可用的代码模板列表
+
+    查看所有可用的预定义模板，用于快速生成常见场景的代码。
+
+    Returns:
+        模板列表及说明
+    """
+    try:
+        templates = code_generator.list_templates()
+
+        return {
+            "success": True,
+            "message": f"共有 {len(templates)} 个可用模板",
+            "data": {
+                "templates": templates
+            }
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "message": "获取模板失败",
+            "error": str(e)
+        }
+
+
+if __name__ == "__main__":
+    import sys
+
+    print("=" * 70)
+    print("Excel COM Code Generator MCP Server")
+    print("=" * 70)
+    print(f"工作区目录: {WORKSPACE_DIR}")
+    print(f"支持语言: PowerShell, Python")
+    print(f"模式: 代码生成 + 沙箱执行")
+    print("=" * 70)
+
+    # 启动服务器
+    mcp.run()

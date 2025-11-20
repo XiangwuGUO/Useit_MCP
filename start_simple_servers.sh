@@ -241,8 +241,8 @@ stop_all_mcp_processes() {
         done
     fi
     
-    # 杀死占用MCP端口的进程 (8002, 8003, 5888)
-    local ports=(8002 8003 5888)
+    # 杀死占用MCP端口的进程 (8002, 8003, 8004, 5888)
+    local ports=(8002 8003 8004 5888)
     for port in "${ports[@]}"; do
         local port_pids=$(lsof -t -i:$port 2>/dev/null || true)
         if [ -n "$port_pids" ]; then

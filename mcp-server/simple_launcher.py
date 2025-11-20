@@ -175,10 +175,22 @@ class SimpleMCPLauncher:
                 description="音频切片服务"
             ),
             SimpleServerConfig(
-                name="filesystem", 
+                name="filesystem",
                 module_path="official_server/filesystem/server.py",
                 port=8003,
                 description="文件系统操作"
+            ),
+            SimpleServerConfig(
+                name="excel_executor",
+                module_path="official_server/excel_executor/server.py",
+                port=8004,
+                description="Excel自动化操作服务(两阶段流水线:Vision分析→代码生成→执行)"
+            ),
+            SimpleServerConfig(
+                name="word_executor",
+                module_path="official_server/word_executor/server.py",
+                port=8005,
+                description="Word文档自动化操作服务(增强流水线:Vision→文档搜索→段落定位→代码生成→执行)"
             ),
         ]
     
@@ -625,7 +637,7 @@ def main():
                        default=os.path.join(os.getcwd(), 'mcp_workspace'))
     parser.add_argument('--list', action='store_true', help='列出可用服务器')
     parser.add_argument('--status', action='store_true', help='显示服务器状态')
-    
+    # python simple_launcher.py --enable-frp --vm-id 123 --session-id 456 --base-dir D:\develop\New_Start\Excel\mcp_workspace --single excel_server
     args = parser.parse_args()
     
     launcher = SimpleMCPLauncher()

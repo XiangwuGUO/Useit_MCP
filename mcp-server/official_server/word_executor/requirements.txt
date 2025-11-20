@@ -1,0 +1,26 @@
+# MCP Core Dependencies
+-e ../../../python-sdk
+mcp>=1.0.0
+fastmcp>=0.1.0
+
+# Data Validation
+pydantic>=2.0.0
+
+# LLM Integration
+openai>=1.0.0
+
+# Image Processing
+Pillow>=10.0.0
+
+# Word Document Processing
+python-docx>=0.8.11
+
+# Windows COM Support (Windows only)
+# pywin32>=305  # For Python COM operations (optional)
+
+# Notes:
+# 1. PowerShell is built into Windows, no additional installation needed
+# 2. If using Python-generated code, install pywin32
+# 3. Ensure Microsoft Word is installed on the system
+# 4. API keys required: OpenAI API key for LLM calls (stage 1 & 2)
+# 5. python-docx is required for reading Word document structure and paragraph information
