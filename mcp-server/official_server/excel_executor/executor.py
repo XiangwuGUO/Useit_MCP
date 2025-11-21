@@ -103,7 +103,7 @@ class CodeExecutor:
             mode='w',
             suffix='.ps1',
             delete=False,
-            encoding='utf-8'
+            encoding='utf-8-sig'  # UTF-8 with BOM for PowerShell compatibility
         ) as f:
             f.write(code)
             script_path = f.name
@@ -278,7 +278,9 @@ class CodeExecutor:
 
         # 保存到工作区
         code_file = self.workspace_dir / filename
-        code_file.write_text(code, encoding='utf-8')
+        # PowerShell 使用 UTF-8 with BOM，Python 使用普通 UTF-8
+        encoding = 'utf-8-sig' if language.lower() == "powershell" else 'utf-8'
+        code_file.write_text(code, encoding=encoding)
 
         return code_file
 

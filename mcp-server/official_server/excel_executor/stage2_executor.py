@@ -197,98 +197,95 @@ class CodeGenerator:
         """Build system prompt for code generation"""
         return """You are an Excel automation expert. The user will provide:
 1. Excel file path
-2. Description of modifications needed
+2. A step-by-step guide of modifications (generated from a previous analysis)
 
-You need to generate complete PowerShell code to execute these modifications.
+You need to generate complete PowerShell code to execute these modifications via COM object.
 
-**CRITICAL REQUIREMENT**: ALL code, comments, variable names, error messages, and output text MUST be in English only.
-Do NOT use any non-English characters (Chinese, Japanese, etc.) to avoid encoding issues in PowerShell.
+**CRITICAL REQUIREMENT - ENCODING**: 
+- Variable names, comments, and log messages MUST be in English.
+- **EXCEPTION**: The String values written INTO the Excel cells (e.g., "接消力池", "跌水2.2") MUST be preserved exactly as they appear in the input. Do NOT translate the data content.
 
-Code requirements:
-- Complete and executable, including all steps
-- Use COM objects to manipulate Excel
-- Include error handling
-- Add comments to explain key steps (in English only)
-- Ensure resource cleanup (close Excel)
-- Use absolute paths or correct relative paths
-- **Important**: Only modify specified cells, do not affect other data
-- **Important**: Do not clear worksheets, do not recreate files
-- **Important**: Only assign values to specified cell ranges
+**Code Requirements**:
+- Complete and executable.
+- Use `New-Object -ComObject Excel.Application`.
+- **Handle Row Insertions**: The input involves inserting rows. Ensure the code executes steps sequentially.
+- **Handle Formulas**: Use `.Formula` property when writing formulas (e.g., `="1/"&...`).
+- **Handle Copy/Fill**: The input involves copying a slope value/formula and pasting it to the rest of the column. Use `.Copy()` and `.PasteSpecial()` or `.AutoFill`.
+- Include resource cleanup (`finally` block).
+- Use absolute paths for file opening.
 
-PowerShell code template (prefer attaching to running Excel):
+**PowerShell Code Template**:
 ```powershell
-# Excel Modification Script - Smart Mode
-# Modification: [description]
+# Excel Modification Script - Hydraulic Calculation
+# Encoding: UTF-8 with BOM is recommended for saving this script
 
 $excel = $null
 $workbook = $null
 $attachedToExisting = $false
 
 try {
-    # 1. Try to attach to existing Excel instance
+    # 1. Setup Excel
     try {
         $excel = [System.Runtime.InteropServices.Marshal]::GetActiveObject("Excel.Application")
         $attachedToExisting = $true
-        Write-Host "Attached to existing Excel instance"
+        Write-Host "Attached to existing Excel instance."
     }
     catch {
-        # If no Excel running, create new instance
         $excel = New-Object -ComObject Excel.Application
         $excel.Visible = $true
         $attachedToExisting = $false
     }
 
-    # 2. Search for target file in open workbooks
-    $fileName = "filename.xlsx"  # File name only, not full path
-    foreach ($wb in $excel.Workbooks) {
-        if ($wb.Name -eq $fileName) {
-            $workbook = $wb
-            break
-        }
-    }
+    # 2. Open Workbook
+    $targetFileName = "filename.xlsx" # Replace with actual filename logic
+    # ... (Insert logic to find or open workbook here) ...
+    # Assume $workbook is set correctly
+    
+    $sheet = $workbook.ActiveSheet 
+    # Or select specific sheet: $sheet = $workbook.Worksheets.Item(1)
 
-    # 3. If not found, open the file
-    if ($null -eq $workbook) {
-        $workbook = $excel.Workbooks.Open("full_path")
-    }
+    Write-Host "Starting modifications..."
 
-    # 4. Modify data in memory
-    $sheet = $workbook.Worksheets.Item(1)
-    # Example: $sheet.Range("K6:K23").Value2 = 0.005
+    # --- START OF MODIFICATIONS ---
+    # Translate the user's step-by-step guide into code below.
+    # Example of handling the specific tasks:
+    
+    # Example: Writing Text (Allowing Chinese in value)
+    # $sheet.Range("A6").Value2 = "接消力池" 
 
-    # 5. Save strategy
-    if ($attachedToExisting) {
-        # Attached to existing Excel, don't auto-save, let user decide
-        Write-Host "Changes made to open Excel. Save manually (Ctrl+S)"
-    }
-    else {
-        # New Excel instance, auto-save
-        $workbook.Save()
-    }
+    # Example: Inserting a Row
+    # $sheet.Rows.Item(13).Insert()
 
-    Write-Output "Modification completed successfully"
+    # Example: Copying Slope Down
+    # $sourceRange = $sheet.Range("K6:F6")
+    # $lastRow = $sheet.Cells.SpecialCells(11).Row # 11 = xlCellTypeLastCell
+    # $fillRange = $sheet.Range("K6:F$lastRow")
+    # $sourceRange.AutoFill($fillRange)
+    
+    # --- END OF MODIFICATIONS ---
+
+    Write-Host "Modifications completed."
+
+    # 3. Save Strategy
+    if (-not $attachedToExisting) {
+        $workbook.Save() 
+    }
+}
+catch {
+    Write-Error "An error occurred: $_"
 }
 finally {
-    # Cleanup only if new instance was created
+    # Cleanup
     if (-not $attachedToExisting) {
         if ($workbook) { $workbook.Close($true) }
-        if ($excel) {
-            $excel.Quit()
+        if ($excel) { 
+            $excel.Quit() 
             [System.Runtime.InteropServices.Marshal]::ReleaseComObject($excel) | Out-Null
         }
     }
     [System.GC]::Collect()
-    [System.GC]::WaitForPendingFinalizers()
 }
-```
-
-Important notes:
-1. Cell references start from 1 (Column A=1, Column B=2)
-2. Range method can use Excel format (e.g., "K6:K23")
-3. Must call $workbook.Save() after modifications
-4. Use absolute paths to open files
-
-Output only PowerShell code, wrapped in ```powershell blocks."""
+"""
 
     def _build_user_message(self, excel_file_path: str, modification_prompt: str) -> str:
         """Build user message for LLM"""
@@ -314,15 +311,21 @@ Generate complete PowerShell code to execute these modifications."""
 {error}
 ```
 
-Please analyze the error and fix the code. Common issues to check:
-1. Character encoding: Ensure ALL code uses ONLY English characters (no Chinese/non-ASCII)
-2. Path issues: Ensure correct absolute paths are used
-3. Cell references: Ensure cell references are correct
-4. Formula syntax: Ensure Excel formula syntax is correct
-5. Data validation: Check if data is empty before using it
-6. String literals: Use double quotes for all strings and avoid non-English characters
+Please analyze the error and fix the code. **Follow these strict rules for the fix**:
 
-Generate the fixed complete code with ALL comments, messages, and text in English only."""
+1.  **Encoding & Language**: 
+    * Variable names, function names, and comments MUST be in **English**.
+    * **CRITICAL EXCEPTION**: String literals that are written into Excel cells (e.g., "接消力池", "跌水2.2") **MUST be preserved in their original Chinese**. Do NOT translate them. Do NOT remove them.
+    * Add `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8` at the very beginning of the script to handle output encoding.
+
+2.  **Common Fixes**:
+    * **Path issues**: Ensure absolute paths are correct and use double backslashes `\\` or single forward slashes `/` if necessary.
+    * **COM Objects**: Ensure `$workbook.Save()` is called before closing.
+    * **Formula Syntax**: Check if `.Formula` string requires double quotes escaping (e.g., `="1/"` might need careful handling inside a PowerShell string).
+    * **Data Validation**: Check if variables are null before using them.
+
+3.  **Output**: Generate the COMPLETE fixed PowerShell code.
+"""
 
     def _extract_code_from_response(self, response_text: str) -> str:
         """Extract PowerShell code from LLM response"""
