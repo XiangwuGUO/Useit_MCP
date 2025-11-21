@@ -25,6 +25,7 @@ from core.client_manager import ClientManager
 from core.langchain_executor import LangChainMCPExecutor
 from core.streaming_executor import StreamingLangChainExecutor
 from core.stream_models import *
+from core.direct_caller import DirectMCPCaller  # 新增：直接调用模块
 from config.settings import settings, validate_required_settings
 from utils.helpers import format_duration, timing_decorator
 
@@ -39,6 +40,7 @@ logger = logging.getLogger(__name__)
 client_manager = ClientManager()
 langchain_executor: Optional[LangChainMCPExecutor] = None
 streaming_executor: Optional[StreamingLangChainExecutor] = None
+direct_caller: Optional[DirectMCPCaller] = None  # 新增：直接调用器
 
 # 服务器启动时间
 server_start_time = datetime.now()
@@ -47,16 +49,16 @@ server_start_time = datetime.now()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
-    global langchain_executor, streaming_executor
-    
+    global langchain_executor, streaming_executor, direct_caller
+
     # 启动时
     logger.info("🚀 MCP Gateway Server 启动 (LangChain版)")
     validate_required_settings()
-    
+
     # 初始化LangChain执行器
     anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
     debug_enabled = os.getenv("MCP_DEBUG_ENABLED", "false").lower() in ("true", "1", "yes")
-    
+
     if anthropic_api_key:
         langchain_executor = LangChainMCPExecutor(client_manager, anthropic_api_key)
         streaming_executor = StreamingLangChainExecutor(client_manager, anthropic_api_key, debug_enabled=debug_enabled)
@@ -64,11 +66,15 @@ async def lifespan(app: FastAPI):
         logger.info(f"✅ Streaming LangChain MCP Executor 已初始化 (调试模式: {'开启' if debug_enabled else '关闭'})")
     else:
         logger.warning("⚠️ 未设置ANTHROPIC_API_KEY，智能任务执行功能将不可用")
-    
+
+    # 初始化直接调用器（总是可用）
+    direct_caller = DirectMCPCaller(client_manager, anthropic_api_key)
+    logger.info("✅ Direct MCP Caller 已初始化")
+
     logger.info("✅ 客户机管理器已就绪")
-    
+
     yield
-    
+
     # 关闭时
     logger.info("🛑 MCP Gateway Server 关闭")
     await client_manager.cleanup()
@@ -352,13 +358,13 @@ async def find_and_call_tool(tool_call: ToolFindCall):
     """查找并调用工具"""
     try:
         logger.info(f"🔍 查找并调用工具: {tool_call.tool_name}")
-        
+
         result = await client_manager.find_tool_and_call(
             tool_call.tool_name,
             tool_call.arguments,
             tool_call.preferred_vm_id
         )
-        
+
         return APIResponse(
             success=True,
             message=f"工具 {tool_call.tool_name} 执行成功",
@@ -371,6 +377,62 @@ async def find_and_call_tool(tool_call: ToolFindCall):
     except Exception as e:
         logger.error(f"工具查找调用失败: {e}")
         raise HTTPException(status_code=500, detail=f"工具查找调用失败: {e}")
+
+
+@app.post("/tools/call-direct", response_model=APIResponse)
+@timing_decorator
+async def call_tool_direct(request: DirectToolCallRequest):
+    """
+    直接调用MCP工具（跳过LLM推理）
+
+    适用场景：
+    - MCP Server只有单个工具
+    - 参数已准备好，不需要AI生成
+    - 需要传递额外的metadata（图片、文件等）
+
+    请求体示例：
+    {
+        "vm_id": "vm1",
+        "session_id": "session1",
+        "mcp_server_name": "excel_executor",
+        "tool_name": "generate_excel",
+        "arguments": {
+            "instruction": "生成销售报表",
+            "output_path": "/output/report.xlsx"
+        },
+        "metadata": {
+            "user_id": "user123"
+        },
+        "files_input": {
+            "files_directory": "/data/input",
+            "file_manifest_path": "/data/input/manifest.json",
+            "auto_select": false,
+            "max_files": 5
+        }
+    }
+    """
+    if not direct_caller:
+        raise HTTPException(
+            status_code=503,
+            detail="Direct caller未初始化"
+        )
+
+    try:
+        logger.info(f"🎯 直接调用MCP工具: {request.tool_name}")
+        logger.info(f"   MCP Server: {request.mcp_server_name}")
+
+        # 调用直接调用器
+        result = await direct_caller.call_tool_directly(request)
+
+        return APIResponse(
+            success=result.success,
+            message=f"工具{'成功' if result.success else '失败'}调用",
+            data=result.model_dump()
+        )
+
+    except Exception as e:
+        logger.error(f"直接调用失败: {e}")
+        raise HTTPException(status_code=500, detail=f"直接调用失败: {e}")
 
 
 @app.post("/filesystem/list-all-paths", response_model=APIResponse)

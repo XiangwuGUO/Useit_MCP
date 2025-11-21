@@ -332,8 +332,351 @@ def check_mcp_client_status(mcp_server_url: str) -> bool:
     except Exception as e:
         logger.logger.exception(f"Status check error: {e}")
         return False
-    
-    
+
+
+# ============================================================================
+# 新增：直接调用MCP工具（跳过LLM）
+# ============================================================================
+
+def call_mcp_tool_directly(
+    mcp_client_url: str,
+    vm_id: str,
+    session_id: str,
+    mcp_server_name: str,
+    tool_name: str,
+    arguments: Dict[str, Any],
+    metadata: Optional[Dict[str, Any]] = None,
+    files_directory: Optional[str] = None,
+    file_manifest_path: Optional[str] = None,
+    auto_select_files: bool = False,
+    max_files: int = 5
+) -> Tuple[bool, Dict[str, Any]]:
+    """
+    🎯 直接调用MCP工具（跳过LLM推理，适合单工具场景）
+
+    **调用模式：** 直接模式（Direct Mode）
+    **是否经过LLM：** ❌ 否
+    **适用场景：**
+    - MCP Server只有单个工具
+    - 工具参数已经准备好，不需要AI生成
+    - 需要快速执行，节省API成本
+    - 需要传递文件/图片等metadata
+
+    **与AI模式的区别：**
+    - 直接模式：跳过LLM，直接调用工具（快速、便宜）
+    - AI模式：使用LLM选择工具和生成参数（智能、灵活）
+
+    Args:
+        mcp_client_url (str): MCP Gateway地址，如 "http://localhost:8080"
+        vm_id (str): 虚拟机ID，用于标识客户端
+        session_id (str): 会话ID，用于标识会话
+        mcp_server_name (str): MCP Server名称，如 "excel_executor"
+        tool_name (str): 要调用的工具名称，如 "generate_excel"
+        arguments (Dict[str, Any]): 工具参数（必须完整准备好）
+            示例：{"instruction": "生成报表", "output_path": "/output/report.xlsx"}
+
+        metadata (Optional[Dict[str, Any]]): 额外的元数据，会透传给MCP Server
+            示例：{"user_id": "user123", "department": "sales"}
+            注意：metadata不经过LLM，直接传递给工具
+
+        files_directory (Optional[str]): 包含输入文件的目录路径
+            示例："/data/input_files"
+            注意：需要与file_manifest_path一起使用
+
+        file_manifest_path (Optional[str]): 文件清单JSON路径
+            示例："/data/input_files/manifest.json"
+            格式：{"files": [{"path": "file.png", "description": "..."}]}
+
+        auto_select_files (bool): 是否使用AI智能选择相关文件
+            - True: 使用AI根据任务描述选择相关文件（需要ANTHROPIC_API_KEY）
+            - False: 使用所有文件（默认）
+            注意：AI选择会从arguments中提取任务描述（instruction/task/description字段）
+
+        max_files (int): 最多处理的文件数量（默认5个）
+
+    Returns:
+        Tuple[bool, Dict[str, Any]]: (成功标志, 结果数据)
+            成功时：(True, {
+                "success": True,
+                "tool_name": "generate_excel",
+                "result": {...},          # 工具返回结果
+                "execution_time_seconds": 1.23,
+                "files_count": 3,         # 使用的文件数
+                "metadata_included": True
+            })
+            失败时：(False, {"error": "错误信息"})
+
+    Example:
+        >>> # 示例1：不带文件的简单调用
+        >>> success, result = call_mcp_tool_directly(
+        ...     mcp_client_url="http://localhost:8080",
+        ...     vm_id="vm1",
+        ...     session_id="session1",
+        ...     mcp_server_name="excel_executor",
+        ...     tool_name="generate_excel",
+        ...     arguments={"instruction": "创建报表", "output_path": "/output/report.xlsx"}
+        ... )
+        >>>
+        >>> # 示例2：带文件的调用（不使用AI选择）
+        >>> success, result = call_mcp_tool_directly(
+        ...     mcp_client_url="http://localhost:8080",
+        ...     vm_id="vm1",
+        ...     session_id="session1",
+        ...     mcp_server_name="excel_executor",
+        ...     tool_name="generate_excel",
+        ...     arguments={"instruction": "根据图片生成报表", "output_path": "/output/report.xlsx"},
+        ...     files_directory="/data/input",
+        ...     file_manifest_path="/data/input/manifest.json",
+        ...     auto_select_files=False,  # 使用所有文件
+        ...     max_files=10
+        ... )
+        >>>
+        >>> # 示例3：使用AI智能选择相关文件
+        >>> success, result = call_mcp_tool_directly(
+        ...     mcp_client_url="http://localhost:8080",
+        ...     vm_id="vm1",
+        ...     session_id="session1",
+        ...     mcp_server_name="excel_executor",
+        ...     tool_name="generate_excel",
+        ...     arguments={
+        ...         "instruction": "根据销售数据和趋势图生成Q1销售分析报表",
+        ...         "output_path": "/output/q1_report.xlsx"
+        ...     },
+        ...     files_directory="/data/q1_files",
+        ...     file_manifest_path="/data/q1_files/manifest.json",
+        ...     auto_select_files=True,   # AI会从10个文件中选择相关的
+        ...     max_files=5
+        ... )
+
+    调用端点：POST /tools/call-direct
+    """
+    try:
+        logger.logger.info(f"直接调用MCP工具: {tool_name} on {mcp_server_name}")
+
+        request_data = {
+            "vm_id": vm_id,
+            "session_id": session_id,
+            "mcp_server_name": mcp_server_name,
+            "tool_name": tool_name,
+            "arguments": arguments
+        }
+
+        # 添加metadata
+        if metadata:
+            request_data["metadata"] = metadata
+
+        # 添加文件配置
+        if files_directory and file_manifest_path:
+            request_data["files_input"] = {
+                "files_directory": files_directory,
+                "file_manifest_path": file_manifest_path,
+                "auto_select": auto_select_files,
+                "max_files": max_files
+            }
+
+        response = requests.post(
+            f"{mcp_client_url}/tools/call-direct",
+            json=request_data,
+            timeout=300
+        )
+
+        if response.status_code == 200:
+            result = response.json()
+            data = result.get('data', {})
+
+            logger.logger.info(f"直接调用成功: {tool_name}")
+            logger.logger.info(f"  执行时间: {data.get('execution_time_seconds', 0):.2f}秒")
+            logger.logger.info(f"  包含文件: {data.get('files_count', 0)}个")
+
+            return data.get('success', False), data
+
+        else:
+            error_msg = f"HTTP {response.status_code}: {response.text}"
+            logger.logger.error(f"直接调用失败: {error_msg}")
+            return False, {"error": error_msg}
+
+    except Exception as e:
+        logger.logger.exception(f"直接调用异常: {e}")
+        return False, {"error": str(e)}
+
+
+# ============================================================================
+# 新增：带文件和Metadata的AI调用
+# ============================================================================
+
+def call_streaming_task_with_files(
+    mcp_client_url: str,
+    vm_id: str,
+    session_id: str,
+    mcp_server_name: str,
+    task_description: str,
+    metadata: Optional[Dict[str, Any]] = None,
+    files_directory: Optional[str] = None,
+    file_manifest_path: Optional[str] = None,
+    auto_select_files: bool = True,
+    max_files: int = 5
+) -> Tuple[bool, Dict[str, Any]]:
+    """
+    🤖 AI智能调用（使用LLM智能选择工具和参数）
+
+    **调用模式：** AI智能模式（AI Mode）
+    **是否经过LLM：** ✅ 是
+    **适用场景：**
+    - 需要AI选择合适的工具（MCP Server有多个工具）
+    - 需要AI生成工具参数
+    - 需要AI从大量文件中智能选择相关内容
+    - 复杂的多步骤任务
+
+    **与直接模式的区别：**
+    - 直接模式：跳过LLM，直接调用工具（快速、便宜）
+    - AI模式：使用LLM选择工具和生成参数（智能、灵活）
+
+    **工作流程：**
+    1. 如果提供文件，AI会根据task_description选择相关文件
+    2. 文件和metadata自动注入到所有工具调用中
+    3. AI使用LLM分析任务，选择合适的工具
+    4. AI生成工具参数并执行
+    5. 支持多轮工具调用
+
+    Args:
+        mcp_client_url (str): MCP Gateway地址，如 "http://localhost:8080"
+        vm_id (str): 虚拟机ID，用于标识客户端
+        session_id (str): 会话ID，用于标识会话
+        mcp_server_name (str): MCP Server名称，如 "excel_executor"
+
+        task_description (str): 任务描述（自然语言）
+            示例：
+            - "根据提供的截图和数据文件，生成一份完整的销售分析报表"
+            - "分析Q1销售趋势，创建包含图表的Excel报表"
+            - "将图片中的数据提取到Excel表格中"
+            注意：描述越详细，AI执行效果越好
+
+        metadata (Optional[Dict[str, Any]]): 自动注入到所有工具调用的metadata
+            示例：{"user_id": "user123", "department": "sales"}
+            注意：metadata对LLM不可见，但会自动添加到所有工具调用中
+
+        files_directory (Optional[str]): 包含输入文件的目录路径
+            示例："/data/input_files"
+
+        file_manifest_path (Optional[str]): 文件清单JSON路径
+            示例："/data/input_files/manifest.json"
+            格式：{"files": [{"path": "file.png", "description": "文件描述"}]}
+            注意：description会帮助AI选择相关文件
+
+        auto_select_files (bool): 是否使用AI智能选择相关文件（默认True）
+            - True: AI根据task_description和文件描述选择相关文件
+            - False: 使用所有文件
+            推荐：文件较多时使用True，可减少传输和处理时间
+
+        max_files (int): 最多处理的文件数量（默认5个）
+            注意：选择的文件数 = min(实际相关文件数, max_files)
+
+    Returns:
+        Tuple[bool, Dict[str, Any]]: (成功标志, 结果数据)
+            成功时：(True, {
+                "success": True,
+                "summary": "任务总结",
+                "final_result": "最终结果",
+                "execution_steps": [           # 执行的步骤列表
+                    {
+                        "step": 1,
+                        "tool_name": "read_file",
+                        "status": "success",
+                        "result": "..."
+                    },
+                    ...
+                ],
+                "execution_time": 12.34,
+                "tool_count": 3,
+                "total_token_usage": {
+                    "input_tokens": 1000,
+                    "output_tokens": 500
+                }
+            })
+            失败时：(False, {"error": "错误信息"})
+
+    Example:
+        >>> # 示例1：简单的AI调用（不带文件）
+        >>> success, result = call_streaming_task_with_files(
+        ...     mcp_client_url="http://localhost:8080",
+        ...     vm_id="vm1",
+        ...     session_id="session1",
+        ...     mcp_server_name="excel_executor",
+        ...     task_description="创建一个包含产品销售数据的Excel报表"
+        ... )
+        >>>
+        >>> # 示例2：带文件的AI调用（使用AI选择相关文件）
+        >>> success, result = call_streaming_task_with_files(
+        ...     mcp_client_url="http://localhost:8080",
+        ...     vm_id="vm1",
+        ...     session_id="session1",
+        ...     mcp_server_name="excel_executor",
+        ...     task_description="根据提供的销售数据和趋势图，生成Q1销售分析报表",
+        ...     metadata={"user_id": "user123", "report_type": "quarterly"},
+        ...     files_directory="/data/q1_files",
+        ...     file_manifest_path="/data/q1_files/manifest.json",
+        ...     auto_select_files=True,  # AI会智能选择相关文件
+        ...     max_files=5
+        ... )
+        >>>
+        >>> # 示例3：使用所有文件（不使用AI选择）
+        >>> success, result = call_streaming_task_with_files(
+        ...     mcp_client_url="http://localhost:8080",
+        ...     vm_id="vm1",
+        ...     session_id="session1",
+        ...     mcp_server_name="excel_executor",
+        ...     task_description="生成完整的数据报表",
+        ...     files_directory="/data/all_data",
+        ...     file_manifest_path="/data/all_data/manifest.json",
+        ...     auto_select_files=False,  # 使用所有文件
+        ...     max_files=20
+        ... )
+
+    调用端点：POST /tasks/execute-stream (流式返回)
+    """
+    try:
+        logger.logger.info(f"AI智能调用: {mcp_server_name} - {task_description[:50]}...")
+
+        request_data = {
+            "vm_id": vm_id,
+            "session_id": session_id,
+            "mcp_server_name": mcp_server_name,
+            "task_description": task_description
+        }
+
+        # 添加metadata
+        if metadata:
+            request_data["metadata"] = metadata
+
+        # 添加文件配置
+        if files_directory and file_manifest_path:
+            request_data["files_input"] = {
+                "files_directory": files_directory,
+                "file_manifest_path": file_manifest_path,
+                "auto_select": auto_select_files,
+                "max_files": max_files
+            }
+
+        response = requests.post(
+            f"{mcp_client_url}/tasks/execute-stream",
+            json=request_data,
+            stream=True,
+            headers={"Accept": "text/event-stream"},
+            timeout=(30, 300)
+        )
+
+        if response.status_code != 200:
+            error_msg = f"HTTP {response.status_code}: {response.text}"
+            logger.logger.error(f"AI调用失败: {error_msg}")
+            return False, {"error": error_msg}
+
+        success, task_result = _process_sse_stream(response)
+
+        return success, task_result
+
+    except Exception as e:
+        logger.logger.exception(f"AI调用异常: {e}")
+        return False, {"error": str(e)}
 
 
 # def calling_external_mcp_server(instruction_text: str, mcp_server_name: str, vm_id: str, session_id: str, mcp_server_url: Optional[str] = None) -> tuple:

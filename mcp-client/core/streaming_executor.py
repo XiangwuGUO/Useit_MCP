@@ -27,6 +27,8 @@ from .streaming_callbacks import StreamingToolCallbackHandler
 from .message_parser import AgentMessageParser
 from .streaming_agent import StreamingAgent
 from .debug_logger import debug_logger
+from .file_processor import FileProcessor  # 新增：文件处理器
+from .metadata_injector import MetadataInjector  # 新增：Metadata注入器
 
 logger = logging.getLogger(__name__)
 
@@ -113,22 +115,30 @@ class StreamingLangChainExecutor(LangChainMCPExecutor):
     
     async def _execute_task_with_events(self, task_request: TaskRequest, task_id: str, event_queue: asyncio.Queue):
         """执行任务并发送事件"""
-        
+
         try:
             logger.info(f"开始执行流式任务 {task_id}")
-            
+
             # 更新任务状态
             self.active_tasks[task_id].status = "running"
-            
-            # 1. 获取或创建流式Agent
+
+            # 0. 处理文件输入和构建metadata（新增）
+            auto_inject_metadata = await self._process_files_and_metadata(
+                task_request,
+                task_id,
+                event_queue
+            )
+
+            # 1. 获取或创建流式Agent（传递metadata）
             logger.info(f"创建流式Agent for {task_request.vm_id}/{task_request.session_id}")
             print(f"🎯🎯🎯 [DEBUG] 使用新的流式Agent代码！任务ID: {task_id}")
             print(f"🎯🎯🎯 [DEBUG] 即将调用 _get_streaming_agent_v2")
-            
+
             streaming_agent = await self._get_streaming_agent_v2(
-                task_request.vm_id, 
+                task_request.vm_id,
                 task_request.session_id,
-                task_request.mcp_server_name
+                task_request.mcp_server_name,
+                auto_inject_metadata=auto_inject_metadata  # 传递metadata
             )
             
             # 2. 构建任务消息
@@ -309,35 +319,47 @@ class StreamingLangChainExecutor(LangChainMCPExecutor):
         
         return agent
     
-    async def _get_streaming_agent_v2(self, vm_id: str, session_id: str, mcp_server_name: Optional[str] = None) -> StreamingAgent:
-        """获取流式Agent（v2版本，使用自定义流式执行）"""
-        
+    async def _get_streaming_agent_v2(
+        self,
+        vm_id: str,
+        session_id: str,
+        mcp_server_name: Optional[str] = None,
+        auto_inject_metadata: Optional[Dict[str, Any]] = None  # 新增参数
+    ) -> StreamingAgent:
+        """获取流式Agent（v2版本，使用自定义流式执行，支持metadata注入）"""
+
         # 1. 构建MCP服务器配置（可选过滤特定服务器）
         mcp_config = await self._build_mcp_config(vm_id, session_id, mcp_server_name)
-        
+
         if mcp_server_name:
             print(f"🎯 [DEBUG] 过滤到指定MCP服务器: {mcp_server_name}")
             print(f"🎯 [DEBUG] MCP配置包含服务器: {list(mcp_config.keys())}")
         else:
             print(f"🎯 [DEBUG] 使用所有可用MCP服务器: {list(mcp_config.keys())}")
-        
+
         # 2. 创建MCP客户端
         mcp_client = MultiServerMCPClient(mcp_config)
-        
+
         # 3. 获取工具并包装以处理参数格式
         raw_tools = await mcp_client.get_tools()
-        
+
         # Debug: 检查原始工具信息
         print(f"🔍 [DEBUG] 原始工具数量: {len(raw_tools)}")
         for i, tool in enumerate(raw_tools[:3]):  # 只显示前3个
             print(f"🔍 [DEBUG] 原始工具 {i}: name={getattr(tool, 'name', 'NO_NAME')}, desc={getattr(tool, 'description', 'NO_DESC')[:50]}")
-        
+
         tools = self._wrap_mcp_tools_for_langchain(raw_tools)
-        
+
         # Debug: 检查包装后工具信息
         print(f"🔍 [DEBUG] 包装后工具数量: {len(tools)}")
         for i, tool in enumerate(tools[:3]):  # 只显示前3个
             print(f"🔍 [DEBUG] 包装后工具 {i}: name={getattr(tool, 'name', 'NO_NAME')}, desc={getattr(tool, 'description', 'NO_DESC')[:50]}")
+
+        # 3.5 注入metadata到工具（新增）
+        if auto_inject_metadata:
+            logger.info(f"为工具注入metadata: {list(auto_inject_metadata.keys())}")
+            tools = MetadataInjector.wrap_tools_with_metadata(tools, auto_inject_metadata)
+            print(f"🔧 [DEBUG] 已注入metadata到所有工具")
         
         # 4. 创建模型
         model = ChatAnthropic(
@@ -585,9 +607,89 @@ class StreamingLangChainExecutor(LangChainMCPExecutor):
         # 只有当工具schema明确包含嵌套req结构时才需要包装
         if not hasattr(tool, 'args_schema') or not tool.args_schema:
             return False
-        
+
         # 检查是否有嵌套的req结构
         if hasattr(tool.args_schema, 'model_fields') and 'req' in tool.args_schema.model_fields:
             return True
-        
+
         return False
+
+    async def _process_files_and_metadata(
+        self,
+        task_request: TaskRequest,
+        task_id: str,
+        event_queue: asyncio.Queue
+    ) -> Optional[Dict[str, Any]]:
+        """
+        处理文件输入和构建metadata
+
+        Args:
+            task_request: 任务请求
+            task_id: 任务ID
+            event_queue: 事件队列
+
+        Returns:
+            构建的metadata对象，如果没有则返回None
+        """
+        metadata_obj = {}
+
+        # 1. 处理文件输入
+        if task_request.files_input:
+            try:
+                logger.info("处理文件输入...")
+
+                # 发送文件处理开始事件
+                await event_queue.put(StreamEvent(
+                    type="file_processing_start",
+                    data={
+                        "task_id": task_id,
+                        "files_directory": task_request.files_input.files_directory
+                    }
+                ))
+
+                # 处理文件
+                files_data = await FileProcessor.process_files_input(
+                    files_config=task_request.files_input,
+                    task_description=task_request.task_description if task_request.files_input.auto_select else None,
+                    anthropic_api_key=self.anthropic_api_key
+                )
+
+                metadata_obj["files"] = files_data
+
+                logger.info(f"处理了 {len(files_data)} 个文件")
+
+                # 发送文件处理完成事件
+                await event_queue.put(StreamEvent(
+                    type="file_processing_complete",
+                    data={
+                        "task_id": task_id,
+                        "files_count": len(files_data)
+                    }
+                ))
+
+            except Exception as e:
+                logger.error(f"文件处理失败: {e}")
+
+                # 发送错误事件
+                await event_queue.put(StreamEvent(
+                    type="error",
+                    data={
+                        "task_id": task_id,
+                        "error_message": f"文件处理失败: {str(e)}"
+                    }
+                ))
+
+                # 继续执行，但不包含文件数据
+
+        # 2. 合并用户提供的metadata
+        if task_request.metadata:
+            metadata_obj.update(task_request.metadata)
+            logger.info(f"合并用户metadata: {list(task_request.metadata.keys())}")
+
+        # 3. 返回metadata（如果有）
+        if metadata_obj:
+            logger.info(f"最终metadata keys: {list(metadata_obj.keys())}")
+            return metadata_obj
+        else:
+            logger.info("没有metadata需要注入")
+            return None
