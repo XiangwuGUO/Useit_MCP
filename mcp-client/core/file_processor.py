@@ -9,7 +9,7 @@
 import json
 import logging
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import base64
 
 from .api_models import FilesInputConfig, FileReference
@@ -72,15 +72,42 @@ class FileProcessor:
 
     @staticmethod
     def _load_manifest(manifest_path: str) -> Dict[str, Any]:
-        """加载文件清单JSON"""
+        """
+        加载文件清单JSON
+        
+        支持两种格式：
+        1. 标准格式: {"files": [{"path": "...", "description": "..."}, ...]}
+        2. RAG格式: [{"path": "绝对路径", "description": "..."}, ...]
+        """
         try:
             with open(manifest_path, 'r', encoding='utf-8') as f:
-                manifest = json.load(f)
+                data = json.load(f)
 
-            if 'files' not in manifest:
-                raise ValueError("清单文件必须包含 'files' 字段")
-
-            return manifest
+            # 检测格式并转换
+            if isinstance(data, list):
+                # RAG格式：直接是文件列表
+                logger.info(f"检测到RAG格式清单文件: {len(data)} 个文件")
+                # 将绝对路径转换为相对路径（保留原始路径信息）
+                files = []
+                for item in data:
+                    if 'path' in item:
+                        # 保留原始绝对路径，但提取文件名作为相对路径
+                        abs_path = item['path']
+                        relative_path = Path(abs_path).name  # 只取文件名
+                        files.append({
+                            'path': relative_path,
+                            'absolute_path': abs_path,  # 保存绝对路径
+                            'description': item.get('description', '')
+                        })
+                return {'files': files, 'format': 'rag'}
+            
+            elif isinstance(data, dict) and 'files' in data:
+                # 标准格式
+                logger.info(f"检测到标准格式清单文件: {len(data['files'])} 个文件")
+                return {**data, 'format': 'standard'}
+            
+            else:
+                raise ValueError("清单文件格式不正确，应为 {'files': [...]} 或 [{...}, ...]")
 
         except FileNotFoundError:
             raise FileNotFoundError(f"清单文件不存在: {manifest_path}")
@@ -135,17 +162,26 @@ class FileProcessor:
     ) -> List[Dict[str, Any]]:
         """编码选中的文件"""
         encoded_files = []
+        is_rag_format = manifest.get('format') == 'rag'
 
         for file_path in selected_files:
-            full_path = Path(files_directory) / file_path
-
-            if not full_path.exists():
-                logger.warning(f"文件不存在，跳过: {full_path}")
-                continue
-
             try:
-                # 从清单中查找文件描述
-                description = FileProcessor._find_file_description(file_path, manifest)
+                # 确定实际的文件路径
+                if is_rag_format:
+                    # RAG格式：使用绝对路径
+                    actual_path, description = FileProcessor._find_rag_file_info(file_path, manifest)
+                    if not actual_path:
+                        logger.warning(f"RAG格式中未找到文件: {file_path}")
+                        continue
+                    full_path = Path(actual_path)
+                else:
+                    # 标准格式：相对路径拼接
+                    full_path = Path(files_directory) / file_path
+                    description = FileProcessor._find_file_description(file_path, manifest)
+
+                if not full_path.exists():
+                    logger.warning(f"文件不存在，跳过: {full_path}")
+                    continue
 
                 # 编码文件
                 file_data = await FileProcessor._encode_single_file(
@@ -165,11 +201,31 @@ class FileProcessor:
 
     @staticmethod
     def _find_file_description(file_path: str, manifest: Dict[str, Any]) -> Optional[str]:
-        """从清单中查找文件描述"""
+        """从清单中查找文件描述（标准格式）"""
         for file_info in manifest.get("files", []):
             if file_info.get("path") == file_path:
                 return file_info.get("description")
         return None
+
+    @staticmethod
+    def _find_rag_file_info(relative_path: str, manifest: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+        """
+        从RAG格式清单中查找文件信息
+        
+        Args:
+            relative_path: 相对路径（文件名）
+            manifest: RAG格式清单
+            
+        Returns:
+            (绝对路径, 描述) 或 (None, None) 如果未找到
+        """
+        for file_info in manifest.get("files", []):
+            if file_info.get("path") == relative_path:
+                return (
+                    file_info.get("absolute_path"),
+                    file_info.get("description")
+                )
+        return None, None
 
     @staticmethod
     async def _encode_single_file(
