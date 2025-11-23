@@ -216,7 +216,7 @@ You need to generate complete PowerShell code to execute these modifications via
 
 **PowerShell Code Template**:
 ```powershell
-# Excel Modification Script - Hydraulic Calculation
+# Excel Modification Script
 # Encoding: UTF-8 with BOM is recommended for saving this script
 
 $excel = $null
@@ -224,7 +224,7 @@ $workbook = $null
 $attachedToExisting = $false
 
 try {
-    # 1. Setup Excel
+    # 1. Setup Excel - Try to attach to existing instance first
     try {
         $excel = [System.Runtime.InteropServices.Marshal]::GetActiveObject("Excel.Application")
         $attachedToExisting = $true
@@ -234,14 +234,30 @@ try {
         $excel = New-Object -ComObject Excel.Application
         $excel.Visible = $true
         $attachedToExisting = $false
+        Write-Host "Created new Excel instance."
     }
 
-    # 2. Open Workbook
-    $targetFileName = "filename.xlsx" # Replace with actual filename logic
-    # ... (Insert logic to find or open workbook here) ...
-    # Assume $workbook is set correctly
-    
-    $sheet = $workbook.ActiveSheet 
+    # 2. Find or Open Workbook
+    $targetFileName = "filename.xlsx" # Replace with actual filename
+    $targetPath = "C:\path\to\file.xlsx" # Replace with actual absolute path
+
+    # Try to find workbook if already open
+    $workbook = $null
+    foreach ($wb in $excel.Workbooks) {
+        if ($wb.FullName -eq $targetPath) {
+            $workbook = $wb
+            Write-Host "Found already open workbook: $targetPath"
+            break
+        }
+    }
+
+    # If not found, open it
+    if (-not $workbook) {
+        $workbook = $excel.Workbooks.Open($targetPath)
+        Write-Host "Opened workbook: $targetPath"
+    }
+
+    $sheet = $workbook.ActiveSheet
     # Or select specific sheet: $sheet = $workbook.Worksheets.Item(1)
 
     Write-Host "Starting modifications..."
@@ -249,9 +265,9 @@ try {
     # --- START OF MODIFICATIONS ---
     # Translate the user's step-by-step guide into code below.
     # Example of handling the specific tasks:
-    
+
     # Example: Writing Text (Allowing Chinese in value)
-    # $sheet.Range("A6").Value2 = "接消力池" 
+    # $sheet.Range("A6").Value2 = "接消力池"
 
     # Example: Inserting a Row
     # $sheet.Rows.Item(13).Insert()
@@ -261,28 +277,36 @@ try {
     # $lastRow = $sheet.Cells.SpecialCells(11).Row # 11 = xlCellTypeLastCell
     # $fillRange = $sheet.Range("K6:F$lastRow")
     # $sourceRange.AutoFill($fillRange)
-    
+
     # --- END OF MODIFICATIONS ---
 
     Write-Host "Modifications completed."
 
-    # 3. Save Strategy
-    if (-not $attachedToExisting) {
-        $workbook.Save() 
-    }
+    # 3. IMPORTANT: Save but DO NOT close
+    # Always save changes, keep Excel open for observation
+    $workbook.Save()
+    Write-Host "Changes saved. Excel window left OPEN for observation."
 }
 catch {
     Write-Error "An error occurred: $_"
+    throw
 }
 finally {
-    # Cleanup
-    if (-not $attachedToExisting) {
-        if ($workbook) { $workbook.Close($true) }
-        if ($excel) { 
-            $excel.Quit() 
-            [System.Runtime.InteropServices.Marshal]::ReleaseComObject($excel) | Out-Null
+    # DO NOT close Excel or workbook - leave it open for user observation
+    # Only cleanup if we created a new instance AND there was an error
+    if ($Error.Count -gt 0 -and -not $attachedToExisting) {
+        Write-Host "Error occurred, cleaning up..."
+        if ($workbook) {
+            try { $workbook.Close($false) } catch {}
+        }
+        if ($excel) {
+            try {
+                $excel.Quit()
+                [System.Runtime.InteropServices.Marshal]::ReleaseComObject($excel) | Out-Null
+            } catch {}
         }
     }
+    # Always collect garbage
     [System.GC]::Collect()
 }
 """

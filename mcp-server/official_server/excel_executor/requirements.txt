@@ -12,11 +12,13 @@ openai>=1.0.0
 # Image Processing
 Pillow>=10.0.0
 
-# Windows COM Support (Windows only)
-# pywin32>=305  # For Python COM operations (optional)
+# Windows Automation & Screenshot Capture
+pywin32>=305  # For Excel COM automation and window capture
+pyautogui>=0.9.54  # Fallback for screenshot capture
 
 # Notes:
 # 1. PowerShell is built into Windows, no additional installation needed
-# 2. If using Python-generated code, install pywin32
-# 3. Ensure Microsoft Excel is installed on the system
-# 4. API keys required: OpenAI API key for LLM calls (stage 1 & 2)
+# 2. pywin32 is now REQUIRED for Excel COM operations and screenshot capture
+# 3. pyautogui is optional fallback if pywin32 screenshot fails
+# 4. Ensure Microsoft Excel is installed on the system
+# 5. API keys required: OpenAI API key for LLM calls (stage 1 & 2)
