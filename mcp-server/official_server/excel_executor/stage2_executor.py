@@ -210,7 +210,8 @@ You need to generate complete PowerShell code to execute these modifications via
 - Use `New-Object -ComObject Excel.Application`.
 - **Handle Row Insertions**: The input involves inserting rows. Ensure the code executes steps sequentially.
 - **Handle Formulas**: Use `.Formula` property when writing formulas (e.g., `="1/"&...`).
-- **Handle Copy/Fill**: The input involves copying a slope value/formula and pasting it to the rest of the column. Use `.Copy()` and `.PasteSpecial()` or `.AutoFill`.
+- **Handle Copy/Fill**: The input involves copying a slope value/formula and pasting it to the rest of the column. Use `.Copy()` and `.PasteSpecial()`.
+- **CRITICAL - Cell Colors**: Use BGR integer values directly (Red=255, Orange=49407, Yellow=65535). DO NOT use `[System.Drawing.Color]` - it's not available in PowerShell by default.
 - Include resource cleanup (`finally` block).
 - Use absolute paths for file opening.
 
@@ -257,8 +258,8 @@ try {
         Write-Host "Opened workbook: $targetPath"
     }
 
-    $sheet = $workbook.ActiveSheet
-    # Or select specific sheet: $sheet = $workbook.Worksheets.Item(1)
+    # IMPORTANT: Always use Sheet1 explicitly
+    $sheet = $workbook.Worksheets.Item("Sheet1")
 
     Write-Host "Starting modifications..."
 
@@ -269,14 +270,23 @@ try {
     # Example: Writing Text (Allowing Chinese in value)
     # $sheet.Range("A6").Value2 = "接消力池"
 
+    # Example: Setting Cell Background Color (BGR format, NOT RGB)
+    # Red: 255, Orange: 49407, Yellow: 65535, Green: 5287936, Blue: 16711680
+    # $sheet.Range("A6").Interior.Color = 255  # Red
+    # $sheet.Range("A12").Interior.Color = 49407  # Orange
+
     # Example: Inserting a Row
     # $sheet.Rows.Item(13).Insert()
 
-    # Example: Copying Slope Down
-    # $sourceRange = $sheet.Range("K6:F6")
-    # $lastRow = $sheet.Cells.SpecialCells(11).Row # 11 = xlCellTypeLastCell
-    # $fillRange = $sheet.Range("K6:F$lastRow")
-    # $sourceRange.AutoFill($fillRange)
+    # Example: Copying Values Down (Use Copy + PasteSpecial)
+    # $sourceRange = $sheet.Range("K6")
+    # $destinationRange = $sheet.Range("K6:K20")
+    # $sourceRange.Copy()
+    # $destinationRange.PasteSpecial(-4163)  # -4163 = xlPasteValues
+
+    # Example: Copying Formulas Down
+    # $sheet.Range("D12").Copy()
+    # $sheet.Range("D13").PasteSpecial(-4163)  # -4163 for formulas too
 
     # --- END OF MODIFICATIONS ---
 

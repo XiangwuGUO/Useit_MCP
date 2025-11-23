@@ -91,6 +91,16 @@ class ExcelScreenshotCapture:
         # Make sure it's visible for screenshot
         excel.Visible = True
 
+        # IMPORTANT: Activate Sheet1 to ensure all operations target it
+        try:
+            # Try by name first
+            workbook.Worksheets("Sheet1").Activate()
+            print("Activated Sheet1 by name")
+        except:
+            # Fallback to index (1-based)
+            workbook.Worksheets(1).Activate()
+            print("Activated first worksheet (index 1)")
+
         # Give Excel time to render
         time.sleep(1)
 

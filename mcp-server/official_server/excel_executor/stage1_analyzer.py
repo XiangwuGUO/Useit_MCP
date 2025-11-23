@@ -316,6 +316,175 @@ Output the complete modification plan in plain text."""
 
         return result
 
+    def generate_prompt_with_conversation(
+        self,
+        excel_app: object,
+        workbook: object,
+        conversation_manager: object = None,  # Not used, kept for API compatibility
+        round_number: int = 1,
+        llm_model: str = "gpt-4o",
+        api_keys: dict = None,
+        save_screenshot: bool = True
+    ) -> dict:
+        """
+        Generate modification prompt using conversation history (multi-turn dialogue)
+
+        Args:
+            excel_app: Excel COM object (already opened)
+            workbook: Workbook object (already opened)
+            round_number: Current round number (1, 2, 3...)
+            llm_model: Vision-capable LLM model
+            api_keys: API keys dictionary
+            save_screenshot: Whether to save the captured screenshot
+
+        Returns:
+            {
+                "success": bool,
+                "prompt_content": str,
+                "saved_to": str,
+                "screenshot_path": str,
+                "round_number": int,
+                "error": str (if failed)
+            }
+        """
+
+        print(f"\n{'=' * 80}")
+        print(f"STAGE 1 (Round {round_number}): Multi-Turn Dialogue Analysis")
+        print(f"{'=' * 80}")
+
+        # 1. Capture screenshot
+        try:
+            print(f"\n[1/4] Capturing Excel screenshot (Round {round_number})...")
+            screenshot_path = None
+            if save_screenshot:
+                screenshot_path = self.workspace_dir / f"screenshot_{round_number}.png"
+                self.screenshot_capture.capture_excel_screenshot(
+                    excel_app=excel_app,
+                    save_path=str(screenshot_path)
+                )
+                print(f"✓ Screenshot captured: {screenshot_path}")
+            else:
+                screenshot_base64 = self.screenshot_capture.capture_and_encode_base64(excel_app=excel_app)
+                screenshot_path = screenshot_base64  # Use base64 string
+                print(f"✓ Screenshot captured (base64)")
+
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Failed to capture screenshot: {str(e)}",
+                "round_number": round_number
+            }
+
+        # 2. Load unified template (same template for all rounds)
+        try:
+            print(f"\n[2/4] Loading template for Round {round_number}...")
+            template_path = Path(__file__).parent / "prompt_template.md"
+
+            if not template_path.exists():
+                return {
+                    "success": False,
+                    "error": f"Template not found: {template_path}",
+                    "round_number": round_number
+                }
+
+            template_content = template_path.read_text(encoding="utf-8")
+
+            # Replace round number placeholder "第 N 轮" → "第 1 轮", "第 2 轮", etc.
+            template_content = template_content.replace("第 N 轮", f"第 {round_number} 轮")
+            print(f"✓ Template loaded: {template_path.name} (轮次: 第 {round_number} 轮)")
+            print(f"  Template length: {len(template_content)} characters")
+
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Failed to load template: {str(e)}",
+                "round_number": round_number
+            }
+
+        # 3. Prepare image content for LLM
+        print(f"\n[3/4] Preparing image for LLM...")
+        try:
+            if save_screenshot:
+                # Use file path
+                image_content = str(screenshot_path)
+            else:
+                # Use base64
+                image_content = screenshot_path  # Already base64 from step 1
+
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Failed to prepare image: {str(e)}",
+                "round_number": round_number
+            }
+
+        # 4. Call LLM with ONLY current round (no history)
+        try:
+            print(f"\n[4/4] Calling vision model: {llm_model}")
+            print(f"Mode: Independent round (no conversation history)")
+
+            # Build messages for current round only
+            messages = [{
+                "content": [
+                    image_content,    # Current screenshot
+                    template_content  # Unified template with round number
+                ]
+            }]
+
+            system_prompt = """You are an Excel automation analysis expert specializing in civil engineering.
+You will receive an Excel screenshot showing channel longitudinal profile data and a task template.
+Analyze the screenshot carefully and generate a detailed modification plan following the template instructions.
+
+Output the complete modification plan in plain text."""
+
+            response_text, token_usage = run_llm(
+                messages=messages,
+                system=system_prompt,
+                llm=llm_model,
+                max_tokens=4096,
+                temperature=0,
+                api_keys=api_keys
+            )
+
+            print(f"✓ LLM response received")
+            print(f"  Token usage: {token_usage}")
+            print(f"  Response length: {len(response_text)} characters")
+
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"LLM call failed: {str(e)}",
+                "round_number": round_number
+            }
+
+        # 5. Save to file
+        try:
+            print(f"\n[5/5] Saving modification prompt...")
+            output_path = self.workspace_dir / f"modify_prompt_{round_number}.txt"
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(response_text, encoding="utf-8")
+            print(f"✓ Prompt saved to: {output_path}")
+
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Failed to save prompt: {str(e)}",
+                "round_number": round_number
+            }
+
+        print(f"\n{'=' * 80}")
+        print(f"STAGE 1 (Round {round_number}) COMPLETED SUCCESSFULLY")
+        print(f"{'=' * 80}")
+
+        return {
+            "success": True,
+            "prompt_content": response_text,
+            "saved_to": str(output_path),
+            "screenshot_path": str(screenshot_path) if save_screenshot else None,
+            "round_number": round_number,
+            "token_usage": token_usage
+        }
+
     def _prepare_image_input(self, image_input: Union[str, Path]) -> str:
         """
         Prepare image input for LLM

@@ -242,6 +242,10 @@ class CodeExecutor:
         # 允许访问工作区和临时目录
         workspace_str = str(self.workspace_dir).lower()
 
+        # 获取项目根目录（workspace_dir 的父目录）
+        # 例如: conv_his -> excel_executor, test_space -> excel_executor
+        project_root = str(self.workspace_dir.parent).lower()
+
         # 提取所有路径
         path_patterns = [
             r'["\']([a-z]:\\[^"\']+)["\']',  # Windows绝对路径
@@ -253,7 +257,11 @@ class CodeExecutor:
             for match in matches:
                 path = match.group(1)
                 # 如果路径不在工作区内，拒绝
-                if workspace_str not in path and 'temp' not in path and 'tmp' not in path:
+                # 允许：1) workspace目录 2) 同项目下其他目录(如test_space) 3) temp目录
+                if (workspace_str not in path and
+                    project_root not in path and
+                    'temp' not in path and
+                    'tmp' not in path):
                     # 允许常见的系统路径用于Excel COM
                     allowed_system = ['program files', 'windows', 'system32']
                     if not any(allowed in path for allowed in allowed_system):
@@ -261,20 +269,25 @@ class CodeExecutor:
 
         return True
 
-    def save_code(self, code: str, language: str) -> Path:
+    def save_code(self, code: str, language: str, round_number: int = None) -> Path:
         """保存代码到文件
 
         Args:
             code: 代码内容
             language: 代码语言
+            round_number: 轮数（可选），如果提供则文件名为 excel_code_{round}.{ext}
 
         Returns:
             保存的文件路径
         """
         # 生成文件名
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
         ext = "ps1" if language.lower() == "powershell" else "py"
-        filename = f"excel_code_{timestamp}.{ext}"
+
+        if round_number is not None:
+            filename = f"excel_code_{round_number}.{ext}"
+        else:
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            filename = f"excel_code_{timestamp}.{ext}"
 
         # 保存到工作区
         code_file = self.workspace_dir / filename
